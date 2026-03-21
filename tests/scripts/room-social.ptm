@@ -1,0 +1,12 @@
+# Open a public room and post a message.
+/auth/key/set psn_test_sharkgod
+/rooms/open noir
+!assert view=room
+!assert room.name=noir
+!assert room.messageCount=2
+!screen-contains room noir
+!screen-contains dropping rain studies
+/rooms/post text="macro room ping"
+!assert room.messageCount=3
+!assert status=room post noir
+!screen-contains macro room ping

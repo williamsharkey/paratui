@@ -1,0 +1,23 @@
+# Login and basic people/profile navigation through the live terminal app.
+!assert auth.loggedIn=false
+!screen-contains Open API Page
+/auth/key/open
+!assert status=https://www.parascene.com/help/developer/api
+!press p
+!assert auth.inputActive=true
+!press escape
+!assert auth.inputActive=false
+/auth/key/set psn_test_sharkgod
+!assert auth.loggedIn=true
+!assert auth.handle=sharkgod
+!assert profile.handle=crosshj
+!screen-contains @crosshj
+!screen-contains @mossman
+!press down
+!assert selected.handle=sharkgod
+!press enter
+!assert profile.handle=sharkgod
+!press up
+!assert selected.handle=crosshj
+!press enter
+!assert profile.handle=crosshj

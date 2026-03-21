@@ -29,6 +29,7 @@
 
 - Prefer Node.js + TypeScript.
 - Prefer Ink for the main TUI renderer unless there is a strong measured reason to replace it.
+- Build around a shared command registry before building feature-specific UI flows.
 - Keep transport and rendering layers separate so headless and interactive modes share core logic.
 - Treat semantic ASCII rendering as a pluggable subsystem.
 - Optimize image browsing for preload and cache locality; previous/current/next should be ready before the user asks.
@@ -36,13 +37,22 @@
 - Export saved images with stable slugged filenames and embedded generation metadata.
 - Keep app persistence simple: one canonical JSON config file per OS user profile.
 
+## Command And Macro Expectations
+
+- Every meaningful user action must have one stable command id.
+- Slash menu entries, keybindings, macros, and tests should resolve through the same command registry.
+- Prefer slash paths like `/people/dm` and ids like `people.dm`.
+- Feature tests should be macro-driven by default.
+- Raw key tests should verify key-to-command mapping separately from feature behavior.
+- New features should define `enter`, `space`, and `esc` behavior when applicable.
+
 ## Auth expectations
 
 - Do not store website session cookies as the long-term auth mechanism.
-- Prefer browser-assisted login that yields a CLI-scoped bearer token.
+- Prefer the browser-generated API key flow documented by parascene.
 - API calls should use `Authorization: Bearer`.
 - Store the bearer token in the same single config JSON as the rest of app state unless requirements change later.
-- Support explicit sign-out and account switching.
+- Support explicit local sign-out and account switching.
 
 ## Config expectations
 

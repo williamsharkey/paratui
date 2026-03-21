@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+if [ -f "$ROOT_DIR/src/cli.ts" ]; then
+  exec npx tsx "$ROOT_DIR/src/cli.ts" "$@"
+fi
+
+exec node "$ROOT_DIR/dist/src/cli.js" "$@"

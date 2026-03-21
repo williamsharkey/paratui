@@ -1,0 +1,35 @@
+{
+  "name": "paratui",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "bin": {
+    "paratui": "./dist/src/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "start": "./paratui",
+    "parascene:server": "tsx scripts/parascene-local-server.ts",
+    "parascene:fixtures": "tsx scripts/setup-parascene-fixtures.ts",
+    "signal:server": "tsx scripts/paratui-signal-server.ts",
+    "signal:probe": "tsx scripts/realtime-probe.ts",
+    "test": "tsx --test --test-concurrency=1 tests/**/*.test.ts"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "sharp": "^0.34.5",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^24.9.1",
+    "@types/ws": "^8.18.1",
+    "node-pty": "^1.0.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

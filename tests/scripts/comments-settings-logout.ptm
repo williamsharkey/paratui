@@ -1,0 +1,21 @@
+# Post a comment, react, toggle sound settings, and log out.
+/auth/key/set psn_test_sharkgod
+!press right
+!assert view=creation
+!assert activity.count=2
+/comment/add text="ptm comment"
+!assert activity.count=3
+!assert status=comment posted
+/comment/react emoji=thumbsUp index=0
+!assert status=reacted thumbsUp
+/settings/open
+!assert view=settings
+!screen-contains [ ] mute menu sounds
+!press space
+!assert settings.audio.muted=true
+!screen-contains [x] mute menu sounds
+!press escape
+!assert view=profile
+/auth/logout
+!assert auth.loggedIn=false
+!assert status=api key removed

@@ -1,0 +1,12 @@
+# Browse the latest social feed.
+/auth/key/set psn_test_sharkgod
+/feed/open
+!assert view=feed
+!assert feed.count=5
+!assert feed.title=ghost alley
+!screen-contains feed latest
+!screen-contains ghost alley by @noirguy
+!press right
+!assert feed.title=late train
+!press left
+!assert feed.title=ghost alley

@@ -4,6 +4,36 @@ Keyboard-native TUI for [parascene.com](https://parascene.com).
 
 `paratui` lives directly in this repository root. Do not create a nested `paratui/` folder inside this repo.
 
+## Install
+
+From this repo:
+
+```bash
+npm install
+npm run build
+npm link
+paratui
+```
+
+Without linking globally:
+
+```bash
+./paratui
+```
+
+Once published to npm:
+
+```bash
+npm install -g paratui
+paratui
+```
+
+or:
+
+```bash
+npx paratui
+```
+
 ## Local setup notes
 
 - Repo root: `./`
@@ -26,6 +56,8 @@ Keyboard-native TUI for [parascene.com](https://parascene.com).
 - headless mode for automation: `paratui --prompt "..." --server ...`
 - drag-and-drop image upload in GUI terminals when supported, with file-path paste fallback
 - image browsing should feel instant, with current, previous, and next ASCII renders preloaded
+- chosen shell direction is the social-first chat layout, not the balanced three-pane layout
+- every meaningful user action should map to one stable command for UI, macros, and tests
 
 ## Recommended stack
 
@@ -66,14 +98,21 @@ Use lower-level terminal control only where Ink needs help:
 
 ## Auth approach
 
-Best v1 auth flow:
+Current v1 auth flow:
 
-1. `paratui login` opens the browser.
-2. User signs into parascene on the web and approves CLI access.
-3. Browser exchanges that approval for a CLI bearer token.
+1. User signs into parascene in a normal browser session.
+2. User opens Profile and generates an API key.
+3. User copies the key once and pastes it into `paratui`.
 4. `paratui` stores the bearer token in its canonical OS config JSON.
-5. `paratui` calls the API with `Authorization: Bearer ...`.
-6. `paratui` can refresh or revoke the token cleanly.
+5. `paratui` calls the API with `Authorization: Bearer psn_<your-secret>`.
+6. Sign-out in `paratui` only removes the saved local key. Key creation, rotation, and removal still happen in the browser.
+
+First-run TUI flow:
+
+- press `enter` to open the API help page
+- generate a key in the browser from `Profile > API key`
+- return to `paratui`, press `p`, paste the key, and press `enter`
+- power-user path: `/auth/key/set psn_<your-secret>`
 
 Avoid for the main design:
 
@@ -104,37 +143,34 @@ Keep permissions tight where the OS allows it. If we harden later, the first lik
 
 ## What parascene already gives us
 
-From the current reference repo, `parascene` already has:
+From the current API help and reference repo, `parascene` already has:
 
-- account signup/login/logout
-- cookie-backed sessions
-- `GET /me`
-- image upload and image-edit flows
-- comments, likes, reactions, follows, feed, explore, servers
+- browser-managed API key generation/removal
+- bearer auth on `/api/...`
+- `GET /api/profile`
+- feed, explore, comments, likes, reactions, follows, user profiles, servers
+- create/image routes under `/api/create...`
 
-That means `paratui` can probably cover a lot of product surface once bearer-token auth is added for CLI use.
+That means `paratui` can cover a meaningful slice of the product today. The missing work is mostly route-shape discovery for create/social flows, not auth issuance.
 
 ## Smallest useful upstream ask
 
-The smallest good PR to `parascene` is not full chat or full peer discovery.
+The smallest good PR to `parascene` is no longer a CLI auth bridge. API keys already exist.
 
-It is a **first-party CLI auth bridge with bearer-token support**:
+The next useful upstream ask is a **stable documented contract** for the routes `paratui` needs beyond auth:
 
-- `POST /api/cli/auth/start`
-- `POST /api/cli/auth/exchange`
-- `POST /api/cli/auth/refresh`
-- `POST /api/cli/auth/revoke`
-- `GET /api/cli/me`
+- exact request/response bodies for `/api/create`
+- stable people/discovery routes that support fast user lists
+- official room/DM/chat routes, if chat is meant to live in parascene
+- a durable bearer introspection shape for secondary services like realtime signaling
 
 Requirements:
 
-- issued from an existing web session or a device/browser approval flow
-- returns a scoped bearer token, not the website cookie
-- supports revoke/sign-out
-- identifies the user and exposes username/display name
-- can be checked by API middleware on routes `paratui` needs
+- keep `Authorization: Bearer psn_...`
+- avoid forcing cookie reuse in CLI integrations
+- keep route contracts stable enough for first-party terminal clients
 
-With just that, `paratui` can ship independently and still talk to parascene safely.
+With that, `paratui` can ship against the real API without guessing from the browser network panel.
 
 ## Peer discovery and chat
 
@@ -193,30 +229,38 @@ This should be a pluggable renderer, not hardwired into the core app loop.
 
 ## Rough screen shape
 
+Chosen shell: **social-first hacker messenger**.
+
+Detailed interaction and macro spec:
+
+- [docs/interaction-model.md](/Users/william/Desktop/paratui/docs/interaction-model.md)
+
 ```text
 +------------------------------------------------------------------+
-| paratui                         you: sharkgod   online            |
-+----------------------+--------------------------+-----------------+
-| people / feed        | image / post            a|                |
-|                      |                          b|                |
-| > @crosshj  online   | fast ascii preview      C|                |
-|   @noirguy offline   |                          d|                |
-|   room: noir         | comments / reactions    E|                |
-|                      |                          |                |
-+----------------------+--------------------------+-----------------+
-| prompt: mutate C with E, gritty film noir, keep silhouette      |
+| paratui           room:noir   you:@sharkgod online               |
++-------------------------+----------------------------+-----------+
+| people / rooms / dm     | thread / room / creation               a|
+|                         |                                         b|
+| > @crosshj   online     | ascii image preview                    C|
+|   @noirguy   offline    |                                         d|
+|   room: noir            | messages / comments / reactions        E|
+|   dm: crosshj           |                                         |
++-------------------------+----------------------------+-----------+
+| command / compose:                                              |
 +------------------------------------------------------------------+
 ```
 
 ## Build order
 
 1. bootstrap a Node + TypeScript CLI with an npm `bin`
-2. stand up Ink app shell and keyboard routing
-3. add browser-assisted bearer-token auth plus single-file config loading/saving
-4. add fast image browser with prev/current/next preload and OS preview handoff
-5. add people list with online state, DM, and jump-to-creations actions
-6. add prompt flow, slot letters on the border, and image upload
-7. add settings view with space-toggle mute checkbox and lightweight UI prefs
-8. add comments/reactions
-9. add headless mode
-10. add chat transport
+2. build the shared command registry and slash-command model
+3. add the macro runner and macro-driven test harness
+4. stand up Ink app shell and keyboard routing
+5. add API-key paste flow plus single-file config loading/saving
+6. add people list with online state, DM, and jump-to-creations actions
+7. add fast image browser with prev/current/next preload and OS preview handoff
+8. add prompt flow, slot letters on the border, and image upload
+9. add settings view with space-toggle mute checkbox and lightweight UI prefs
+10. add comments/reactions
+11. add headless mode
+12. add chat transport

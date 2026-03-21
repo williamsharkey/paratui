@@ -1,0 +1,23 @@
+# Open creations, move through art, and assign a slot.
+/auth/key/set psn_test_sharkgod
+!press right
+!assert view=creation
+!assert creation.ownerHandle=crosshj
+!assert creation.title=earthworm jim
+!assert creation.preloaded.next=true
+!screen-contains earthworm jim
+!press right
+!assert creation.title=noir bridge
+!assert creation.preloaded.previous=true
+!assert creation.preloaded.next=true
+!press right
+!assert creation.title=glass tunnel
+!assert creation.preloaded.previous=true
+/art/slot/assign slot=C
+!assert slots.C.assigned=true
+!assert slots.C.title=glass tunnel
+!screen-contains C|
+!press space
+!assert previewOpen=true
+!press space
+!assert previewOpen=false

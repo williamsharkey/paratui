@@ -1,0 +1,52 @@
+# Auth focus should be keyboard-drivable before login.
+!assert focus=auth
+!assert actions.selectedId=open_api_help
+!press down
+!wait actions.selectedId=paste_api_key
+!press space
+!wait auth.inputActive=true
+!press escape
+!wait auth.inputActive=false
+!wait focus=auth
+
+# Slash menu should expose /auth/login and tab-complete it.
+!press slash
+!assert slash.open=true
+!assert slash.selectedPath=/auth/login
+!type auth/log
+!wait slash.input=/auth/log
+!press tab
+!wait slash.input=/auth/login
+!assert slash.selectedPath=/auth/login
+!press enter
+!wait auth.inputActive=true
+!press escape
+!wait auth.inputActive=false
+
+# Full slash commands with args should still execute.
+!press slash
+!type auth/key/set psn_test_sharkgod
+!press enter
+!wait auth.loggedIn=true
+!wait focus=left
+
+# Tab and shift-tab should walk the active panes.
+!press tab
+!wait focus=center
+!wait actions.selectedId=open_creations
+!press shift-tab
+!wait focus=left
+
+# Partial people paths should tab-complete and left/right should change selection.
+!press slash
+!type peo
+!wait slash.input=/peo
+!press tab
+!wait slash.input=/people/
+!assert slash.selectedPath=/people/open
+!press right
+!assert slash.selectedPath=/people/profile
+!screen-contains /people/profile
+!press enter
+!wait view=profile
+!wait slash.open=false

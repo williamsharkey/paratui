@@ -1,0 +1,17 @@
+# Log in, connect to live realtime, and send room/direct/signal actions.
+/auth/key/set psn_test_sharkgod
+/realtime/connect room=noir
+!assert view=live
+!assert realtime.connected=true
+!assert realtime.room=noir
+!wait realtime.peerCount=1
+!screen-contains live noir
+
+/realtime/room/chat text="macro live ping"
+!assert status=live room sent noir
+
+/realtime/dm/send @crosshj text="macro live dm"
+!assert status=live dm @crosshj
+
+/realtime/signal/send @crosshj type=offer payload="macro-offer" call=call-1
+!assert status=live signal offer @crosshj

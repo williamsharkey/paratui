@@ -1,0 +1,8 @@
+# Generate an image via prompt and export it with metadata.
+/auth/key/set psn_test_sharkgod
+/prompt/send prompt="acid rain alley" title="acid alley" server=noir method=mutate
+!assert view=creation
+!assert creation.title=acid alley
+!assert creation.count=1
+/art/save format=png
+!assert status=saved acid-alley-sharkgod.png
