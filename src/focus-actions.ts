@@ -57,9 +57,7 @@ export function getFocusActions(state: AppState, focus: FocusRegion = state.focu
     case "dm":
       return [
         { id: "dm_compose", label: "type here to dm" },
-        { id: "open_active_profile", label: "Open Profile" },
-        { id: "open_feed", label: "Open Feed" },
-        { id: "open_settings", label: "Open Settings" }
+        { id: "open_active_creations", label: "Open Creations" }
       ];
     case "room":
       return [

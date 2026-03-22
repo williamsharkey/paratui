@@ -557,6 +557,112 @@ function serializeCreationRow(row: any) {
   };
 }
 
+function localUploadServerSummary() {
+  return {
+    id: 1,
+    name: "Parascene",
+    description: "Official Parascene system server",
+    status: "active",
+    members_count: null,
+    created_at: new Date().toISOString(),
+    is_owner: false,
+    is_member: true,
+    can_manage: false,
+    can_join_leave: false,
+    suspended: false,
+    owner: {
+      id: 4,
+      display_name: "Admin",
+      user_name: "admin",
+      avatar_url: null,
+      email_prefix: "admin"
+    },
+    server_config: {
+      status: "operational",
+      methods: {
+        uploadImage: {
+          name: "Upload Image",
+          fields: {
+            image_url: {
+              type: "image_url",
+              label: "Image URL",
+              required: true
+            }
+          },
+          intent: "image_generate",
+          credits: 0,
+          description: "Resizes an image from a URL to 1024x1024 (cover + entropy crop)."
+        }
+      }
+    }
+  };
+}
+
+function genericKeyFromImageUrl(rawUrl: string): string | null {
+  const value = String(rawUrl || "").trim();
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = new URL(value, "http://127.0.0.1");
+    const match = parsed.pathname.match(/^\/api\/images\/generic\/(.+)$/);
+    return match?.[1] ? decodeURIComponent(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function createUploadedImage(options: {
+  userId: number;
+  imageUrl: string;
+  creationToken: string;
+}) {
+  const user = await loadCliUser(options.userId);
+  const key = genericKeyFromImageUrl(options.imageUrl);
+  if (!key || typeof storage.getGenericImageBuffer !== "function") {
+    throw new Error("Uploaded image not found");
+  }
+
+  const inputBuffer = await storage.getGenericImageBuffer(key);
+  const outputBuffer = await sharp(inputBuffer)
+    .resize(1024, 1024, {
+      fit: "cover",
+      position: "entropy"
+    })
+    .png()
+    .toBuffer();
+  const filename = `upload-${user.handle}-${Date.now()}.png`;
+  await storage.uploadImage(outputBuffer, filename);
+  const filePath = `/api/images/created/${filename}`;
+  const meta = {
+    args: {
+      image_url: options.imageUrl
+    },
+    method: "uploadImage",
+    method_name: "Upload Image",
+    server_id: 1,
+    server_name: "Parascene",
+    media_type: "image",
+    creation_token: options.creationToken
+  };
+
+  const insert = await queries.insertCreatedImage.run(
+    options.userId,
+    filename,
+    filePath,
+    1024,
+    1024,
+    "#000000",
+    "completed",
+    meta
+  );
+  const creationId = Number(insert.insertId || insert.lastInsertRowid);
+  return {
+    id: creationId,
+    status: "completed"
+  };
+}
+
 async function generatePromptImage(options: {
   userId: number;
   prompt: string;
@@ -619,6 +725,45 @@ await seedDevApiKeys();
 
 app.get("/api/cli/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+app.get("/api/servers", async (req, res) => {
+  const viewerId = await authenticateBearer(req);
+  if (!viewerId) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  return res.json({
+    servers: [localUploadServerSummary()]
+  });
+});
+
+app.post("/api/create", async (req, res, next) => {
+  const viewerId = await authenticateBearer(req);
+  if (!viewerId) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  if (Number(req.body?.server_id) !== 1 || String(req.body?.method || "") !== "uploadImage") {
+    return next();
+  }
+
+  const imageUrl = String(req.body?.args?.image_url || "").trim();
+  const creationToken = String(req.body?.creation_token || "").trim();
+  if (!imageUrl || !creationToken) {
+    return res.status(400).json({ error: "Bad request", message: "image_url and creation_token are required" });
+  }
+
+  try {
+    const created = await createUploadedImage({
+      userId: viewerId,
+      imageUrl,
+      creationToken
+    });
+    return res.json(created);
+  } catch (error) {
+    return res.status(400).json({
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
 });
 
 app.post("/api/cli/auth/login", async (req, res) => {

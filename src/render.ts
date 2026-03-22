@@ -260,6 +260,12 @@ function buildHeaderContext(state: AppState): string | null {
     return "settings";
   }
 
+  if (state.view === "notifications") {
+    return state.notifications.unreadCount
+      ? `notifications ${state.notifications.unreadCount} unread`
+      : "notifications";
+  }
+
   if (state.view === "live") {
     return `live ${state.realtime.room || "(offline)"}`;
   }
@@ -276,77 +282,59 @@ function roomParticipantLine(state: AppState): string {
   return handles.length ? `users: ${handles.map((handle) => `@${handle}`).join(" ")}` : "users: (no messages yet)";
 }
 
-function personLabel(handle: string, displayName: string): string {
-  return displayName && displayName !== handle ? `${displayName} @${handle}` : `@${handle}`;
-}
-
-function buildPeopleRows(state: AppState): RenderRow[] {
+function buildSidebarRows(state: AppState): RenderRow[] {
   if (!state.authUser) {
     const draft = state.authInput.active
       ? `key: ${maskApiKey(state.authInput.draft)}${state.authInput.draft ? "" : "█"}`
       : "key: (empty)";
     return [
-      { text: "people" },
-      { text: "" },
       { text: "not signed in" },
       { text: "" },
-      { text: "up/down pick action" },
-      { text: "enter/space invokes" },
-      { text: "tab keeps auth focus" },
+      { text: "enter opens help" },
+      { text: "p pastes key" },
       { text: "" },
       { text: draft }
     ];
   }
 
-  const rows: RenderRow[] = [{ text: "people" }, { text: "" }];
   const entries = getLeftNavEntries(state);
-  let entryIndex = 0;
+  const rows: RenderRow[] = [];
 
-  for (const person of state.people.items) {
-    const marker = entryIndex === state.people.selectedIndex ? ">" : " ";
-    const online = person.online ? "online" : "offline";
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!;
+    const previous = index > 0 ? entries[index - 1] : null;
+    const movedIntoPeople = entry.kind === "person" && previous && previous.kind !== "person";
+    const movedIntoRooms = (entry.kind === "room" || entry.kind === "new-room")
+      && previous
+      && previous.kind !== "room"
+      && previous.kind !== "new-room";
+    if ((movedIntoPeople || movedIntoRooms) && rows[rows.length - 1]?.text !== "") {
+      rows.push({ text: "" });
+    }
+
+    let text = "";
+    if (entry.kind === "feed") {
+      text = "Feed";
+    } else if (entry.kind === "notifications") {
+      text = entry.unreadCount ? `Notifications (${entry.unreadCount})` : "Notifications";
+    } else if (entry.kind === "settings") {
+      text = "Settings";
+    } else if (entry.kind === "person" && entry.handle) {
+      text = `@${entry.handle}${entry.online ? " [on]" : ""}`;
+    } else if (entry.kind === "people_page") {
+      text = `people[${(entry.pageIndex || 0) + 1}/${entry.pageCount || 1}]`;
+    } else if (entry.kind === "room" && entry.roomName) {
+      text = entry.roomName;
+    } else if (entry.kind === "new-room") {
+      text = "+ room";
+    }
+
     rows.push({
-      text: `${marker} ${personLabel(person.handle, person.displayName)} ${online}`,
-      inverted: state.focus === "left" && entryIndex === state.people.selectedIndex
+      text,
+      inverted: state.focus === "left" && index === state.people.selectedIndex
     });
-    entryIndex += 1;
   }
 
-  const roomEntries = entries.filter((entry) => entry.kind === "room" || entry.kind === "new-room");
-  if (roomEntries.length) {
-    rows.push({ text: "" });
-    rows.push({ text: "rooms" });
-    for (const entry of roomEntries) {
-      const marker = entryIndex === state.people.selectedIndex ? ">" : " ";
-      rows.push({
-        text: entry.kind === "new-room"
-          ? `${marker} + room`
-          : `${marker} ${entry.roomName}${entry.messageCount ? `  ${entry.messageCount}` : ""}`,
-        inverted: state.focus === "left" && entryIndex === state.people.selectedIndex
-      });
-      entryIndex += 1;
-    }
-  }
-
-  if (state.social.dms.length) {
-    rows.push({ text: "" });
-    rows.push({ text: "dms" });
-    for (const dm of state.social.dms) {
-      const marker = entryIndex === state.people.selectedIndex ? ">" : " ";
-      rows.push({
-        text: `${marker} ${personLabel(dm.handle, dm.displayName)} ${dm.online ? "online" : "offline"}`,
-        inverted: state.focus === "left" && entryIndex === state.people.selectedIndex
-      });
-      entryIndex += 1;
-    }
-  }
-  if (state.realtime.connected) {
-    rows.push({ text: "" });
-    rows.push({ text: "live" });
-    for (const peer of state.realtime.peers.slice(0, 3)) {
-      rows.push({ text: ` @${peer.handle}  live` });
-    }
-  }
   return rows;
 }
 
@@ -382,6 +370,33 @@ function buildCenterContentRows(state: AppState): RenderRow[] {
       { text: "" },
       { text: "space or enter toggles" },
       { text: "esc returns" }
+    ];
+  }
+
+  if (state.view === "notifications") {
+    if (!state.notifications.items.length) {
+      return [
+        { text: "notifications" },
+        { text: "" },
+        { text: "no notifications" }
+      ];
+    }
+
+    const visibleCount = 10;
+    const selectedIndex = clampIndex(state.notifications.selectedIndex, state.notifications.items.length);
+    const start = Math.max(
+      0,
+      Math.min(
+        selectedIndex - Math.floor(visibleCount / 2),
+        Math.max(0, state.notifications.items.length - visibleCount)
+      )
+    );
+    const items = state.notifications.items.slice(start, start + visibleCount);
+    return [
+      ...items.map((item, index) => ({
+        text: `${item.acknowledged_at ? " " : "*"} ${item.title}${item.message ? ` - ${item.message}` : ""}`,
+        inverted: state.focus === "center" && start + index === selectedIndex
+      }))
     ];
   }
 
@@ -494,7 +509,7 @@ function buildActionFooterRows(state: AppState, focus: FocusRegion): RenderRow[]
     ];
   }
 
-  if (focus === "center" && state.view === "creation" && state.composer.active && state.composer.kind === "comment") {
+  if (state.view === "creation" && state.composer.active && state.composer.kind === "comment") {
     return [
       { text: "" },
       { text: `comment: ${state.composer.text}${state.composer.text ? "" : "█"}`, inverted: true },
@@ -502,7 +517,7 @@ function buildActionFooterRows(state: AppState, focus: FocusRegion): RenderRow[]
     ];
   }
 
-  if (focus === "center" && (state.view === "room" || state.view === "dm") && state.composer.active) {
+  if ((state.view === "room" || state.view === "dm") && state.composer.active) {
     const label = state.view === "room" ? "chat" : "dm";
     return [
       { text: "" },
@@ -550,19 +565,21 @@ function buildStatusLine(state: AppState): string {
 }
 
 function buildSuggestionLine(state: AppState, _commands: CommandSpec[], width: number): string {
-  let hint = "arrows move  enter opens  tab switches focus  esc backs out";
+  let hint = "up/down browses  type sends in dm/room/comment  tab switches focus  esc backs out";
   if (!state.authUser) {
     hint = "p pastes api key  enter opens help";
   } else if (state.composer.active) {
     hint = "type text  enter sends  esc cancels";
   } else if (state.view === "creation") {
-    hint = "left/right art  up comments  down buttons  type on [+ comment]";
+    hint = "left/right art  up/down moves comments and buttons  type adds a comment";
+  } else if (state.view === "notifications") {
+    hint = "up/down selects notifications  enter marks read  tab switches focus";
   } else if (state.view === "room") {
-    hint = "type on chat button  up/down buttons  esc back";
+    hint = "type to chat  enter sends  tab switches focus";
   } else if (state.view === "dm") {
-    hint = "type on dm button  up/down buttons  esc back";
+    hint = "type to dm  enter sends  tab switches focus";
   } else if (state.focus === "left") {
-    hint = "up/down select  enter opens  right jumps in";
+    hint = "up/down changes view  type sends in the active view";
   }
   return pad(hint, width);
 }
@@ -619,7 +636,7 @@ export function renderApp(
   lines.push(middleBorder(layout.totalWidth, columnDivider));
 
   if (layout.mode === "columns") {
-    const leftLines = normalizeRows(buildPeopleRows(state), layout.leftWidth, layout.bodyHeight);
+    const leftLines = normalizeRows(buildSidebarRows(state), layout.leftWidth, layout.bodyHeight);
     const centerLines = buildCenterRows(state, layout.centerWidth, layout.bodyHeight);
 
     for (let index = 0; index < layout.bodyHeight; index += 1) {
@@ -629,7 +646,7 @@ export function renderApp(
     }
   } else {
     const separatorHeight = layout.bodyHeight > layout.topSectionHeight + layout.bottomSectionHeight ? 1 : 0;
-    const peopleLines = normalizeRows(buildPeopleRows(state), layout.contentWidth, layout.topSectionHeight);
+    const peopleLines = normalizeRows(buildSidebarRows(state), layout.contentWidth, layout.topSectionHeight);
     const centerLines = buildCenterRows(state, layout.contentWidth, layout.bottomSectionHeight);
     let rowIndex = 0;
 

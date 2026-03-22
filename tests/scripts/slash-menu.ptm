@@ -23,7 +23,7 @@
 # Tab and shift-tab should walk the active panes.
 !press tab
 !wait focus=center
-!wait actions.selectedId=open_dm
+!wait actions.selectedId=previous_feed
 !press shift-tab
 !wait focus=left
 

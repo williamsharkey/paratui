@@ -1,6 +1,6 @@
 # Open creations, move through art, and assign a slot.
 /auth/key/set psn_test_sharkgod
-!press right
+/people/creations @crosshj
 !assert view=creation
 !assert creation.ownerHandle=crosshj
 !assert creation.title=earthworm jim

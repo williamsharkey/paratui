@@ -1,35 +1,28 @@
 # Open a public room from the left pane and post a message.
 /auth/key/set psn_test_sharkgod
-!assert view=profile
 !press down
 !press down
 !press down
 !press down
-!assert status=selected room noir
-!press enter
+!press down
+!press down
 !assert view=room
-!assert room.name=noir
+!assert room.name=mutations
 !assert room.messageCount=2
-!screen-contains room #noir
+!screen-contains room #mutations
 !screen-contains users:
-!screen-contains dropping rain studies
-!assert actions.selectedId=chat_compose
+!screen-contains chain two prompts and post it
 !type macro room ping
 !assert composer.active=true
 !press enter
 !assert room.messageCount=3
-!assert status=room post noir
+!assert status=room post mutations
 !screen-contains macro room ping
-!press escape
-!assert view=profile
 !screen-contains + room
 !press down
+!assert view=room
+!assert room.name=noir
 !press down
-!press down
-!press down
-!press down
-!press down
-!assert status=create room
 !press enter
 !assert composer.active=true
 !assert composer.kind=room_join

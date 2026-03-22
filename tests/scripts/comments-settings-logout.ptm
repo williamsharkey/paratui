@@ -1,6 +1,6 @@
 # Post a comment, react, toggle sound settings, and log out.
 /auth/key/set psn_test_sharkgod
-!press right
+/people/creations @crosshj
 !assert view=creation
 !assert activity.count=2
 !press down

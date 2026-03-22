@@ -221,6 +221,22 @@ export function createCommandRegistry(): CommandSpec[] {
       }
     },
     {
+      id: "media.upload",
+      path: "/media/upload",
+      title: "Upload Image",
+      order: 45,
+      run: async (app, command) => {
+        const rawPath = command.named.path || command.positional.join(" ");
+        if (!rawPath.trim()) {
+          throw new Error("Usage: /media/upload path=/absolute/path/to/image.png");
+        }
+        const handled = await app.shareImageInput(rawPath.trim());
+        if (!handled) {
+          throw new Error("Image path not found");
+        }
+      }
+    },
+    {
       id: "rooms.open",
       path: "/rooms/open",
       title: "Open Room",

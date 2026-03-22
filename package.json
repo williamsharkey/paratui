@@ -42,6 +42,7 @@
     "test": "tsx --test --test-concurrency=1 tests/**/*.test.ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "2.39.0",
     "bcryptjs": "^2.4.3",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",

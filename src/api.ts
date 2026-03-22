@@ -5,6 +5,7 @@ import type {
   CreationSummary,
   DmSummary,
   FeedItem,
+  NotificationSummary,
   RoomSummary,
   SocialMessage,
   UserProfileData
@@ -32,6 +33,15 @@ interface UsersResponse {
   users: CliUserSummary[];
 }
 
+interface FollowingResponse {
+  following: Array<{
+    user_id?: number;
+    user_name?: string | null;
+    display_name?: string | null;
+    followed_at?: string | null;
+  }>;
+}
+
 interface ActivityResponse {
   items: ActivityItem[];
   comment_count: number;
@@ -44,6 +54,14 @@ interface CommentResponse {
 interface ReactionResponse {
   added: boolean;
   count: number;
+}
+
+interface NotificationsResponse {
+  notifications: NotificationSummary[];
+}
+
+interface NotificationUnreadCountResponse {
+  count?: number;
 }
 
 interface RoomsResponse {
@@ -92,6 +110,40 @@ interface PromptResponse {
   image: CreationSummary;
 }
 
+interface UploadedImageResponse {
+  ok?: boolean;
+  key: string;
+  url: string;
+}
+
+interface CreateImageResponse {
+  id: number;
+  status?: string | null;
+}
+
+interface CreateImageDetailResponse {
+  id: number;
+  url?: string | null;
+  thumbnail_url?: string | null;
+  created_at?: string | null;
+  published?: boolean;
+  published_at?: string | null;
+  title?: string | null;
+  description?: string | null;
+  status?: string | null;
+  media_type?: string | null;
+  nsfw?: boolean;
+  meta?: Record<string, unknown> | null;
+  creator?: {
+    user_name?: string | null;
+    display_name?: string | null;
+  } | null;
+}
+
+interface ShareCreationResponse {
+  url?: string | null;
+}
+
 interface ChatThread {
   id: number;
   type: "dm" | "channel";
@@ -129,6 +181,31 @@ interface ChatThreadsResponse {
   threads: ChatThreadListItem[];
 }
 
+interface ServerMethodField {
+  type?: string | null;
+  required?: boolean;
+}
+
+interface ServerMethodConfig {
+  fields?: Record<string, ServerMethodField> | null;
+  intent?: string | null;
+  intents?: string[] | null;
+  default?: boolean;
+}
+
+interface ServerConfigResponse {
+  methods?: Record<string, ServerMethodConfig> | null;
+}
+
+interface ServerSummary {
+  id: number;
+  server_config?: ServerConfigResponse | string | null;
+}
+
+interface ServersResponse {
+  servers?: ServerSummary[];
+}
+
 interface ChatMessageRow {
   id: number;
   thread_id: number;
@@ -157,10 +234,42 @@ interface CachedUserIdentity {
   displayName: string;
 }
 
+interface UploadTarget {
+  serverId: number;
+  method: string;
+}
+
+interface SocialListSummary {
+  rooms: RoomSummary[];
+  dms: DmSummary[];
+}
+
+interface SupabaseSessionResponse {
+  access_token?: string | null;
+  refresh_token?: string | null;
+  expires_in?: number | null;
+  expires_at?: number | null;
+  token_type?: string | null;
+}
+
+export interface ParasceneRealtimeConfig {
+  url: string;
+  anonKey: string;
+}
+
+export interface ParasceneRealtimeSession {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number | null;
+  expiresAt: number | null;
+  tokenType: string;
+}
+
 export class ParasceneClient {
   #baseUrl: string;
   #getToken: () => string | null;
   #profileCacheById = new Map<number, CachedUserIdentity>();
+  #uploadTargetPromise: Promise<UploadTarget> | null = null;
 
   constructor(baseUrl: string, getToken: () => string | null) {
     this.#baseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
@@ -190,8 +299,43 @@ export class ParasceneClient {
     };
   }
 
-  async listUsers(): Promise<CliUserSummary[]> {
+  async listUsers(viewerHandle?: string | null): Promise<CliUserSummary[]> {
     const presenceUsers = await this.listPresenceUsers();
+    const presenceByHandle = new Map(
+      (presenceUsers || []).map((user) => [user.handle, user] as const)
+    );
+
+    if (viewerHandle) {
+      try {
+        const data = await this.#requestJson<FollowingResponse>(
+          `api/users/by-username/${encodeURIComponent(viewerHandle)}/following?limit=100`
+        );
+        const followed = data.following
+          .map((user) => {
+            const handle = String(user.user_name || "").trim();
+            if (!handle) {
+              return null;
+            }
+            const presence = presenceByHandle.get(handle);
+            return {
+              id: Number(user.user_id || presence?.id || 0),
+              email: presence?.email || "",
+              role: presence?.role || "user",
+              handle,
+              displayName: String(user.display_name || handle),
+              online: presence?.online || false,
+              lastActiveAt: presence?.lastActiveAt || user.followed_at || null
+            } satisfies CliUserSummary;
+          })
+          .filter((user): user is CliUserSummary => Boolean(user));
+        if (followed.length > 0) {
+          return followed;
+        }
+      } catch {
+        // Fall through to presence/feed discovery.
+      }
+    }
+
     if (presenceUsers) {
       return presenceUsers;
     }
@@ -221,6 +365,30 @@ export class ParasceneClient {
     } catch {
       return [];
     }
+  }
+
+  async loadNotifications(limit = 40): Promise<NotificationSummary[]> {
+    const data = await this.#requestJson<NotificationsResponse>(`api/notifications?limit=${limit}`);
+    return Array.isArray(data.notifications) ? data.notifications : [];
+  }
+
+  async loadNotificationUnreadCount(): Promise<number> {
+    const data = await this.#requestJson<NotificationUnreadCountResponse>("api/notifications/unread-count");
+    return Number(data.count || 0);
+  }
+
+  async acknowledgeNotification(notificationId: number): Promise<void> {
+    await this.#requestJson<unknown>("api/notifications/acknowledge", {
+      method: "POST",
+      body: JSON.stringify({ id: notificationId })
+    });
+  }
+
+  async acknowledgeAllNotifications(): Promise<void> {
+    await this.#requestJson<unknown>("api/notifications/acknowledge-all", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
   }
 
   async listPresenceUsers(): Promise<CliUserSummary[] | null> {
@@ -262,21 +430,11 @@ export class ParasceneClient {
   }
 
   async listRooms(): Promise<RoomSummary[]> {
-    const threads = await this.#listThreads();
-    if (threads) {
-      return threads
-        .filter((thread) => thread.type === "channel" && thread.channel_slug)
-        .map((thread) => ({
-          name: String(thread.channel_slug || "").toLowerCase(),
-          title: thread.title || `#${String(thread.channel_slug || "").toLowerCase()}`,
-          messageCount: 0,
-          lastMessageText: thread.last_message?.body || null
-        }));
+    const social = await this.listSocialSummaries();
+    if (social.rooms.length || this.#usesOfficialHostedApi()) {
+      return social.rooms;
     }
 
-    if (this.#usesOfficialHostedApi()) {
-      return [];
-    }
     try {
       const data = await this.#requestJson<RoomsResponse>("api/cli/social/rooms");
       return data.rooms;
@@ -301,20 +459,9 @@ export class ParasceneClient {
   }
 
   async listDms(): Promise<DmSummary[]> {
-    const threads = await this.#listThreads();
-    if (threads) {
-      return threads
-        .filter((thread) => thread.type === "dm" && thread.other_user?.user_name)
-        .map((thread) => {
-          const handle = String(thread.other_user?.user_name || "").replace(/^@/, "");
-          const displayName = String(thread.other_user?.display_name || handle);
-          return {
-            handle,
-            displayName,
-            online: false,
-            lastMessageText: thread.last_message?.body || null
-          };
-        });
+    const social = await this.listSocialSummaries();
+    if (social.dms.length || this.#usesOfficialHostedApi()) {
+      return social.dms;
     }
 
     try {
@@ -399,6 +546,169 @@ export class ParasceneClient {
     return Buffer.from(bytes);
   }
 
+  async uploadImageBufferAsPublic(options: {
+    buffer: Buffer;
+    filename: string;
+    title: string;
+    description: string;
+    timeoutMs?: number;
+  }): Promise<{
+    creation: CreationSummary;
+    shareUrl: string;
+  }> {
+    const upload = await this.#uploadGenericImage(options.buffer, options.filename);
+    const target = await this.#resolveUploadTarget();
+    const created = await this.#requestJson<CreateImageResponse>("api/create", {
+      method: "POST",
+      body: JSON.stringify({
+        server_id: target.serverId,
+        method: target.method,
+        args: {
+          image_url: upload.url
+        },
+        creation_token: createCreationToken()
+      })
+    });
+
+    const completed = await this.#waitForCreationComplete(created.id, options.timeoutMs);
+    const published = await this.#requestJson<CreateImageDetailResponse>(`api/create/images/${created.id}/publish`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: options.title,
+        description: options.description,
+        nsfw: false
+      })
+    });
+
+    let shareUrl = "";
+    try {
+      const share = await this.#requestJson<ShareCreationResponse>(`api/create/images/${created.id}/share`, {
+        method: "POST"
+      });
+      shareUrl = String(share.url || "").trim();
+    } catch {
+      shareUrl = "";
+    }
+
+    return {
+      creation: mapCreateImageDetail(published.url ? published : completed),
+      shareUrl: shareUrl || this.#fallbackCreationUrl(created.id)
+    };
+  }
+
+  async createHostedRealtimeSession(): Promise<ParasceneRealtimeSession | null> {
+    try {
+      const session = await this.#requestJson<SupabaseSessionResponse>("api/auth/supabase-session", {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      const accessToken = String(session.access_token || "").trim();
+      const refreshToken = String(session.refresh_token || "").trim();
+      if (!accessToken || !refreshToken) {
+        return null;
+      }
+      return {
+        accessToken,
+        refreshToken,
+        expiresIn: Number.isFinite(Number(session.expires_in)) ? Number(session.expires_in) : null,
+        expiresAt: Number.isFinite(Number(session.expires_at)) ? Number(session.expires_at) : null,
+        tokenType: String(session.token_type || "bearer")
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async discoverHostedRealtimeConfig(): Promise<ParasceneRealtimeConfig | null> {
+    const token = this.#getToken();
+    const url = this.#hostedAppDiscoveryUrl();
+    if (!token || !url) {
+      return null;
+    }
+
+    try {
+      const response = await fetch(url, {
+        headers: {
+          accept: "text/html",
+          authorization: `Bearer ${token}`
+        }
+      });
+      if (!response.ok) {
+        return null;
+      }
+      return parseHostedRealtimeConfigFromHtml(await response.text());
+    } catch {
+      return null;
+    }
+  }
+
+  async bootstrapHostedRealtime(explicitConfig: ParasceneRealtimeConfig | null = null): Promise<{
+    config: ParasceneRealtimeConfig;
+    session: ParasceneRealtimeSession;
+  } | null> {
+    const config = explicitConfig || await this.discoverHostedRealtimeConfig();
+    if (!config) {
+      return null;
+    }
+    const session = await this.createHostedRealtimeSession();
+    if (!session) {
+      return null;
+    }
+    return {
+      config,
+      session
+    };
+  }
+
+  async listSocialSummaries(): Promise<SocialListSummary> {
+    const threads = await this.#listThreads();
+    if (threads) {
+      return {
+        rooms: threads
+          .filter((thread) => thread.type === "channel" && thread.channel_slug)
+          .map((thread) => ({
+            name: String(thread.channel_slug || "").toLowerCase(),
+            title: thread.title || `#${String(thread.channel_slug || "").toLowerCase()}`,
+            messageCount: 0,
+            lastMessageText: thread.last_message?.body || null,
+            lastMessageAt: thread.last_message?.created_at || null
+          }))
+          .sort(compareThreadActivity),
+        dms: threads
+          .filter((thread) => thread.type === "dm" && thread.other_user?.user_name)
+          .map((thread) => {
+            const handle = String(thread.other_user?.user_name || "").replace(/^@/, "");
+            const displayName = String(thread.other_user?.display_name || handle);
+            return {
+              handle,
+              displayName,
+              online: false,
+              lastMessageText: thread.last_message?.body || null,
+              lastMessageAt: thread.last_message?.created_at || null
+            };
+          })
+          .sort(compareThreadActivity)
+      };
+    }
+
+    if (this.#usesOfficialHostedApi()) {
+      return {
+        rooms: [],
+        dms: []
+      };
+    }
+
+    const [rooms, dms] = await Promise.allSettled([
+      this.#requestJson<RoomsResponse>("api/cli/social/rooms"),
+      this.#requestJson<DmsResponse>("api/cli/social/dms")
+    ]);
+
+    return {
+      rooms: rooms.status === "fulfilled" ? rooms.value.rooms : [],
+      dms: dms.status === "fulfilled" ? dms.value.dms : []
+    };
+  }
+
   async #buildRoomMessagesResponse(thread: ChatThread, roomName: string): Promise<RoomMessagesResponse> {
     const messages = await this.#loadThreadMessages(thread.id);
     const normalized = thread.channel_slug || normalizeChannelTag(roomName);
@@ -408,7 +718,8 @@ export class ParasceneClient {
         name: normalized,
         title: `#${normalized}`,
         messageCount: messages.length,
-        lastMessageText: messages[messages.length - 1]?.text || null
+        lastMessageText: messages[messages.length - 1]?.text || null,
+        lastMessageAt: messages[messages.length - 1]?.createdAt || null
       },
       messages
     };
@@ -422,7 +733,8 @@ export class ParasceneClient {
         handle: target.handle,
         displayName: target.displayName,
         online: false,
-        lastMessageText: messages[messages.length - 1]?.text || null
+        lastMessageText: messages[messages.length - 1]?.text || null,
+        lastMessageAt: messages[messages.length - 1]?.createdAt || null
       },
       messages
     };
@@ -523,6 +835,113 @@ export class ParasceneClient {
     }
   }
 
+  async #uploadGenericImage(buffer: Buffer, filename: string): Promise<UploadedImageResponse> {
+    const response = await fetch(new URL("api/images/generic", this.#baseUrl), {
+      method: "POST",
+      headers: {
+        ...this.#authHeaders(),
+        "content-type": guessImageContentType(filename),
+        "x-upload-kind": "edited",
+        "x-upload-name": filename
+      },
+      body: new Uint8Array(buffer)
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `Upload failed: ${response.status}`);
+    }
+
+    return response.json() as Promise<UploadedImageResponse>;
+  }
+
+  async #resolveUploadTarget(): Promise<UploadTarget> {
+    if (!this.#uploadTargetPromise) {
+      this.#uploadTargetPromise = this.#loadUploadTarget().catch((error) => {
+        this.#uploadTargetPromise = null;
+        throw error;
+      });
+    }
+    return this.#uploadTargetPromise;
+  }
+
+  async #loadUploadTarget(): Promise<UploadTarget> {
+    try {
+      const data = await this.#requestJson<ServersResponse | ServerSummary[]>("api/servers");
+      const servers = Array.isArray(data) ? data : data.servers || [];
+      for (const server of servers) {
+        const config = normalizeServerConfig(server.server_config);
+        const methods = config?.methods || {};
+        if (methods.uploadImage) {
+          return {
+            serverId: Number(server.id),
+            method: "uploadImage"
+          };
+        }
+      }
+
+      for (const server of servers) {
+        const config = normalizeServerConfig(server.server_config);
+        const methods = config?.methods || {};
+        for (const [methodKey, method] of Object.entries(methods)) {
+          const fields = method?.fields || {};
+          const fieldEntries = Object.entries(fields);
+          if (fieldEntries.length !== 1) {
+            continue;
+          }
+          const [fieldKey, fieldConfig] = fieldEntries[0]!;
+          if (fieldKey === "image_url" && fieldConfig?.type === "image_url") {
+            return {
+              serverId: Number(server.id),
+              method: methodKey
+            };
+          }
+        }
+      }
+    } catch {
+      // Fall through to the known hosted default.
+    }
+
+    return {
+      serverId: 1,
+      method: "uploadImage"
+    };
+  }
+
+  async #waitForCreationComplete(creationId: number, timeoutMs = 30_000): Promise<CreateImageDetailResponse> {
+    const deadline = Date.now() + timeoutMs;
+    let lastDetail: CreateImageDetailResponse | null = null;
+
+    while (Date.now() <= deadline) {
+      const detail = await this.#requestJson<CreateImageDetailResponse>(`api/create/images/${creationId}`);
+      lastDetail = detail;
+      if (detail.status === "completed" && detail.url) {
+        return detail;
+      }
+      if (detail.status === "failed") {
+        throw new Error("Image upload failed on parascene");
+      }
+      await sleep(500);
+    }
+
+    throw new Error(`Timed out waiting for uploaded image ${creationId}${lastDetail?.status ? ` (${lastDetail.status})` : ""}`);
+  }
+
+  #fallbackCreationUrl(creationId: number): string {
+    try {
+      const base = new URL(this.#baseUrl);
+      if (base.hostname === "api.parascene.com") {
+        return `https://www.parascene.com/creations/${creationId}`;
+      }
+      if (base.hostname === "www.parascene.com" || base.hostname === "parascene.com") {
+        return `https://${base.hostname}/creations/${creationId}`;
+      }
+      return new URL(`creations/${creationId}`, this.#baseUrl).toString();
+    } catch {
+      return `/creations/${creationId}`;
+    }
+  }
+
   async #requestJson<T>(pathname: string, init: RequestInit = {}, auth = true): Promise<T> {
     const url = new URL(pathname.replace(/^\//, ""), this.#baseUrl);
     const response = await fetch(url, {
@@ -545,6 +964,24 @@ export class ParasceneClient {
   #authHeaders(): Record<string, string> {
     const token = this.#getToken();
     return token ? { authorization: `Bearer ${token}` } : {};
+  }
+
+  #hostedAppDiscoveryUrl(): URL | null {
+    try {
+      const base = new URL(this.#baseUrl);
+      if (base.hostname === "api.parascene.com") {
+        return new URL("https://www.parascene.com/connect");
+      }
+      if (base.hostname.startsWith("api.")) {
+        base.hostname = `www.${base.hostname.slice(4)}`;
+      }
+      base.pathname = "/connect";
+      base.search = "";
+      base.hash = "";
+      return base;
+    } catch {
+      return null;
+    }
   }
 
   #usesOfficialHostedApi(): boolean {
@@ -580,4 +1017,113 @@ function normalizeChannelTag(input: string): string {
     .replace(/^#/, "")
     .trim()
     .toLowerCase();
+}
+
+function compareThreadActivity(
+  left: { name?: string; handle?: string; lastMessageAt?: string | null },
+  right: { name?: string; handle?: string; lastMessageAt?: string | null }
+): number {
+  const leftStamp = Date.parse(left.lastMessageAt || "");
+  const rightStamp = Date.parse(right.lastMessageAt || "");
+  if (Number.isFinite(leftStamp) || Number.isFinite(rightStamp)) {
+    if (!Number.isFinite(leftStamp)) {
+      return 1;
+    }
+    if (!Number.isFinite(rightStamp)) {
+      return -1;
+    }
+    if (leftStamp !== rightStamp) {
+      return rightStamp - leftStamp;
+    }
+  }
+  const leftName = String(left.handle || left.name || "");
+  const rightName = String(right.handle || right.name || "");
+  return leftName.localeCompare(rightName);
+}
+
+export function parseHostedRealtimeConfigFromHtml(html: string): ParasceneRealtimeConfig | null {
+  const match = String(html || "").match(/window\.__PRSN_SUPABASE__\s*=\s*(\{[\s\S]*?\})\s*;/);
+  if (!match?.[1]) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(match[1]) as Partial<ParasceneRealtimeConfig>;
+    const url = String(parsed.url || "").trim();
+    const anonKey = String(parsed.anonKey || "").trim();
+    if (!url || !anonKey) {
+      return null;
+    }
+    return {
+      url,
+      anonKey
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeServerConfig(value: ServerSummary["server_config"]): ServerConfigResponse | null {
+  if (!value) {
+    return null;
+  }
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as ServerConfigResponse;
+    } catch {
+      return null;
+    }
+  }
+  return value;
+}
+
+function mapCreateImageDetail(detail: CreateImageDetailResponse): CreationSummary {
+  return {
+    id: Number(detail.id),
+    title: detail.title || null,
+    description: detail.description || null,
+    url: detail.url || null,
+    thumbnail_url: detail.thumbnail_url || detail.url || null,
+    created_at: detail.created_at || new Date(0).toISOString(),
+    published: Boolean(detail.published),
+    published_at: detail.published_at || null,
+    media_type: detail.media_type || "image",
+    nsfw: Boolean(detail.nsfw),
+    ownerHandle: detail.creator?.user_name || null,
+    ownerDisplayName: detail.creator?.display_name || detail.creator?.user_name || null,
+    prompt: null,
+    metadata: detail.meta || null
+  };
+}
+
+function createCreationToken(): string {
+  const stamp = Date.now().toString(36);
+  const random = Math.random().toString(36).slice(2, 10);
+  return `crt_${stamp}_${random}`;
+}
+
+function guessImageContentType(filename: string): string {
+  const lower = String(filename || "").toLowerCase();
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  if (lower.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (lower.endsWith(".gif")) {
+    return "image/gif";
+  }
+  if (lower.endsWith(".bmp")) {
+    return "image/bmp";
+  }
+  if (lower.endsWith(".tif") || lower.endsWith(".tiff")) {
+    return "image/tiff";
+  }
+  return "image/png";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }

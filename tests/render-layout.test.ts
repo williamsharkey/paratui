@@ -47,7 +47,8 @@ function createState(): AppState {
           lastActiveAt: null
         }
       ],
-      selectedIndex: 0
+      selectedIndex: 0,
+      pageIndex: 0
     },
     profile: {
       user: {
@@ -94,6 +95,11 @@ function createState(): AppState {
       currentIndex: 0,
       ascii: ""
     },
+    notifications: {
+      items: [],
+      unreadCount: 3,
+      selectedIndex: 0
+    },
     realtime: {
       connected: false,
       room: null,
@@ -117,7 +123,8 @@ function createState(): AppState {
     composer: {
       active: false,
       kind: null,
-      text: ""
+      text: "",
+      returnFocus: null
     },
     slots: {
       A: null,
@@ -172,7 +179,8 @@ test("stacked layout still renders social shell cleanly", () => {
   const state = createState();
   const commands = createCommandRegistry();
   const screen = renderApp(state, commands, { columns: 60, rows: 20 });
-  assert.match(screen, /people/);
+  assert.match(screen, /Feed/);
+  assert.match(screen, /Notifications \(3\)/);
   assert.match(screen, /profile @crosshj/);
 });
 

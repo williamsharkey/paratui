@@ -1,10 +1,15 @@
 export type FocusRegion = "left" | "center" | "slash" | "settings" | "auth";
 
-export type AppView = "login" | "profile" | "creation" | "settings" | "dm" | "room" | "feed" | "live";
+export type AppView = "login" | "profile" | "creation" | "settings" | "dm" | "room" | "feed" | "notifications" | "live";
 
 export interface AppConfig {
   serverBaseUrl: string;
   realtimeBaseUrl: string;
+  parasceneRealtime: {
+    enabled: boolean;
+    url: string | null;
+    anonKey: string | null;
+  };
   auth: {
     bearerToken: string | null;
     username: string | null;
@@ -31,6 +36,7 @@ export interface CliUserSummary {
   displayName: string;
   online: boolean;
   lastActiveAt: string | null;
+  publishedCreations?: number | null;
 }
 
 export interface CliAuthUser {
@@ -110,6 +116,7 @@ export interface RoomSummary {
   title: string;
   messageCount: number;
   lastMessageText: string | null;
+  lastMessageAt?: string | null;
 }
 
 export interface DmSummary {
@@ -117,11 +124,24 @@ export interface DmSummary {
   displayName: string;
   online: boolean;
   lastMessageText: string | null;
+  lastMessageAt?: string | null;
 }
 
 export interface FeedItem extends CreationSummary {
   ownerHandle: string | null;
   ownerDisplayName: string | null;
+}
+
+export interface NotificationSummary {
+  id: number;
+  title: string;
+  message: string;
+  link: string | null;
+  type: string | null;
+  created_at: string;
+  acknowledged_at: string | null;
+  count?: number;
+  unread_count?: number;
 }
 
 export interface SlotValue {
@@ -156,6 +176,7 @@ export interface ComposerState {
   active: boolean;
   kind: "comment" | "room" | "dm" | "room_join" | null;
   text: string;
+  returnFocus: FocusRegion | null;
 }
 
 export interface AppState {
@@ -175,6 +196,7 @@ export interface AppState {
   people: {
     items: CliUserSummary[];
     selectedIndex: number;
+    pageIndex: number;
   };
   profile: UserProfileData | null;
   creations: {
@@ -199,6 +221,11 @@ export interface AppState {
     items: FeedItem[];
     currentIndex: number;
     ascii: string;
+  };
+  notifications: {
+    items: NotificationSummary[];
+    unreadCount: number;
+    selectedIndex: number;
   };
   realtime: {
     connected: boolean;
@@ -229,6 +256,9 @@ export interface AppState {
 }
 
 export interface AppSnapshot {
+  meta: {
+    inputSeq: number;
+  };
   view: AppView;
   focus: FocusRegion;
   status: string;
@@ -270,6 +300,11 @@ export interface AppSnapshot {
     title: string | null;
     index: number;
     count: number;
+  };
+  notifications: {
+    count: number;
+    unreadCount: number;
+    selectedId: number | null;
   };
   realtime: {
     connected: boolean;

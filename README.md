@@ -174,6 +174,29 @@ Requirements:
 
 With that, `paratui` can ship against the real API without guessing from the browser network panel.
 
+## Upstream Notes
+
+The latest upstream chat/realtime change review is tracked in:
+
+- `docs/parascene-upstream-chat-realtime-2026-03-22.md`
+
+That note separates:
+
+- public documented chat API surface that `paratui` can rely on now
+- newer repo-only realtime/browser features that still need an explicit supported contract before `paratui` should depend on them
+
+## Realtime Freshness
+
+`paratui` now prefers the official parascene Supabase Broadcast invalidation flow when the server exposes it, and falls back to the existing polling path when it does not.
+
+- default behavior: auto-discover the logged-in web shell config, open a Supabase session bridge, and subscribe to inbox/thread invalidation
+- authoritative data still comes from HTTP chat/profile/feed routes
+- fallback remains active, so unsupported environments still work normally
+- optional overrides:
+  - `PARATUI_PARASCENE_REALTIME=0` disables official realtime and uses polling only
+  - `PARATUI_SUPABASE_URL=...`
+  - `PARATUI_SUPABASE_ANON_KEY=...`
+
 ## Peer discovery and chat
 
 Pure internet-scale peer discovery without any server support is not the right default.

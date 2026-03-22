@@ -31,6 +31,11 @@ export function defaultConfig(): AppConfig {
   return {
     serverBaseUrl: process.env.PARATUI_SERVER_BASE_URL || "https://api.parascene.com",
     realtimeBaseUrl: process.env.PARATUI_REALTIME_BASE_URL || "ws://127.0.0.1:8788/realtime",
+    parasceneRealtime: {
+      enabled: process.env.PARATUI_PARASCENE_REALTIME !== "0",
+      url: process.env.PARATUI_SUPABASE_URL || null,
+      anonKey: process.env.PARATUI_SUPABASE_ANON_KEY || null
+    },
     auth: {
       bearerToken: null,
       username: null
@@ -61,6 +66,10 @@ export async function loadConfig(): Promise<AppConfig> {
       ...base,
       ...parsed,
       realtimeBaseUrl: parsed.realtimeBaseUrl || base.realtimeBaseUrl,
+      parasceneRealtime: {
+        ...base.parasceneRealtime,
+        ...(parsed.parasceneRealtime || {})
+      },
       auth: {
         ...base.auth,
         ...(parsed.auth || {})

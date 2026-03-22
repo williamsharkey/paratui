@@ -12,7 +12,7 @@ import type { AppSnapshot } from "../../src/types.js";
 const ROOT_DIR = path.resolve(path.join(import.meta.dirname, "..", ".."));
 const TSX_CLI = path.join(ROOT_DIR, "node_modules", "tsx", "dist", "cli.mjs");
 const PTY_RELAY = path.join(ROOT_DIR, "tests", "helpers", "pty_relay.py");
-const CLEAR_MARKER = "\x1b[2J\x1b[H";
+const CLEAR_MARKERS = ["\x1b[2J\x1b[H", "\x1b[H\x1b[2J"];
 
 type BridgeEvent =
   | { type: "ready"; snapshot: AppSnapshot }
@@ -456,6 +456,7 @@ export class InteractiveAppHarness {
   readonly configDir: string;
   readonly configPath: string;
   readonly exportDir: string;
+  readonly clipboardPath: string;
   readonly terminal: ChildProcessWithoutNullStreams;
   #rawOutput = "";
   #latestScreen = "";
@@ -465,6 +466,7 @@ export class InteractiveAppHarness {
     bridge: BridgeHarness,
     configDir: string,
     exportDir: string,
+    clipboardPath: string,
     terminal: ChildProcessWithoutNullStreams
   ) {
     this.serverBaseUrl = serverBaseUrl;
@@ -472,6 +474,7 @@ export class InteractiveAppHarness {
     this.configDir = configDir;
     this.configPath = path.join(configDir, "config.json");
     this.exportDir = exportDir;
+    this.clipboardPath = clipboardPath;
     this.terminal = terminal;
   }
 
@@ -481,6 +484,7 @@ export class InteractiveAppHarness {
     const bridge = await BridgeHarness.create();
     const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paratui-test-"));
     const exportDir = path.join(configDir, "exports");
+    const clipboardPath = path.join(configDir, "clipboard.txt");
     await fs.mkdir(exportDir, { recursive: true });
     await fs.writeFile(
       path.join(configDir, "config.json"),
@@ -515,21 +519,25 @@ export class InteractiveAppHarness {
         PARATUI_SERVER_BASE_URL: serverBaseUrl,
         PARATUI_ENABLE_TEST_SLASH: "1",
         PARATUI_DISABLE_EXTERNAL_OPEN: "1",
+        PARATUI_TEST_CLIPBOARD_FILE: clipboardPath,
         TERM: process.env.TERM || "xterm-256color"
       },
       stdio: ["pipe", "pipe", "pipe"]
     });
 
-    const harness = new InteractiveAppHarness(serverBaseUrl, bridge, configDir, exportDir, terminal);
+    const harness = new InteractiveAppHarness(serverBaseUrl, bridge, configDir, exportDir, clipboardPath, terminal);
     const onChunk = (chunk: Buffer | string) => {
       harness.#rawOutput += String(chunk);
       if (harness.#rawOutput.length > 100_000) {
         harness.#rawOutput = harness.#rawOutput.slice(-50_000);
       }
 
-      const lastClear = harness.#rawOutput.lastIndexOf(CLEAR_MARKER);
+      const lastClear = CLEAR_MARKERS.reduce((max, marker) => {
+        const index = harness.#rawOutput.lastIndexOf(marker);
+        return Math.max(max, index);
+      }, -1);
       const visible = lastClear >= 0
-        ? harness.#rawOutput.slice(lastClear + CLEAR_MARKER.length)
+        ? harness.#rawOutput.slice(lastClear + CLEAR_MARKERS.find((marker) => harness.#rawOutput.lastIndexOf(marker) === lastClear)!.length)
         : harness.#rawOutput;
       harness.#latestScreen = stripAnsi(visible);
     };
@@ -569,10 +577,30 @@ export class InteractiveAppHarness {
     return JSON.parse(raw);
   }
 
+  async readClipboard(): Promise<string> {
+    try {
+      return await fs.readFile(this.clipboardPath, "utf8");
+    } catch {
+      return "";
+    }
+  }
+
   async pressKey(key: string, predicate?: (snapshot: AppSnapshot) => boolean): Promise<AppSnapshot> {
     const afterSeq = this.bridge.seq;
+    const beforeInputSeq = this.snapshot().meta.inputSeq;
     this.terminal.stdin.write(keyToBytes(key));
-    return this.bridge.waitForIdle(afterSeq, predicate);
+    return this.bridge.waitForIdle(afterSeq, (snapshot) => (
+      snapshot.meta.inputSeq > beforeInputSeq && (!predicate || predicate(snapshot))
+    ));
+  }
+
+  async pasteText(text: string, predicate?: (snapshot: AppSnapshot) => boolean): Promise<AppSnapshot> {
+    const afterSeq = this.bridge.seq;
+    const beforeInputSeq = this.snapshot().meta.inputSeq;
+    this.terminal.stdin.write(text);
+    return this.bridge.waitForIdle(afterSeq, (snapshot) => (
+      snapshot.meta.inputSeq > beforeInputSeq && (!predicate || predicate(snapshot))
+    ));
   }
 
   async typeText(text: string, predicate?: (snapshot: AppSnapshot) => boolean): Promise<AppSnapshot | null> {
@@ -583,10 +611,19 @@ export class InteractiveAppHarness {
     }
     for (let index = 0; index < chars.length; index += 1) {
       const afterSeq = this.bridge.seq;
+      const beforeInputSeq = this.snapshot().meta.inputSeq;
       this.terminal.stdin.write(chars[index]!);
       snapshot = await this.bridge.waitForIdle(
         afterSeq,
-        predicate && index === chars.length - 1 ? predicate : undefined
+        (nextSnapshot) => {
+          if (nextSnapshot.meta.inputSeq <= beforeInputSeq) {
+            return false;
+          }
+          if (predicate && index === chars.length - 1) {
+            return predicate(nextSnapshot);
+          }
+          return true;
+        }
       );
     }
     return snapshot;
@@ -608,12 +645,10 @@ export class InteractiveAppHarness {
   async runCommand(command: string): Promise<AppSnapshot> {
     assert.match(command, /^\//);
     await this.pressKey("slash", (snapshot) => snapshot.slash.open === true);
-    const afterSeq = this.bridge.seq;
     if (command.length > 1) {
-      this.terminal.stdin.write(command.slice(1));
+      await this.typeText(command.slice(1));
     }
-    this.terminal.stdin.write("\r");
-    return this.bridge.waitForIdle(afterSeq, (snapshot) => snapshot.slash.open === false);
+    return this.pressKey("enter", (snapshot) => snapshot.slash.open === false);
   }
 
   assertSnapshot(pathName: string, expectedRaw: string): void {

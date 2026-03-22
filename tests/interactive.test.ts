@@ -80,6 +80,38 @@ test("interactive PTY scripts stay in sync with the live TUI", { concurrency: fa
     });
   });
 
+  await t.test("room uploads can publish and copy a share link without leaving chat", async () => {
+    await withApp(async (app) => {
+      await app.runCommand("/auth/key/set psn_test_sharkgod");
+      await app.runCommand("/rooms/join noir");
+
+      const tempImagePath = path.join(app.configDir, "drop-share.png");
+      await sharp({
+        create: {
+          width: 24,
+          height: 24,
+          channels: 3,
+          background: { r: 240, g: 240, b: 240 }
+        }
+      })
+        .png()
+        .toFile(tempImagePath);
+
+      const beforeMessages = app.snapshot().room.messageCount;
+      await app.pressKey("space", (snapshot) => snapshot.composer.active === true && snapshot.composer.kind === "room");
+      await app.typeText(tempImagePath);
+      await app.pressKey("enter");
+      await app.waitForSnapshot("status", "uploaded drop share and copied link", 20_000);
+
+      assert.equal(app.snapshot().view, "room");
+      assert.equal(app.snapshot().room.name, "noir");
+      assert.equal(app.snapshot().room.messageCount, beforeMessages);
+
+      const clipboard = await app.readClipboard();
+      assert.match(clipboard, /\/s\/[a-z0-9]+\/.+/i);
+    });
+  });
+
   await t.test("prompt generation and export packing stay scriptable", async () => {
     await withApp(async (app) => {
       await runPtmScript(app, path.join(SCRIPT_DIR, "prompt-export.ptm"));
