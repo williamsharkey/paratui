@@ -6,9 +6,13 @@ Keyboard-native TUI for [parascene.com](https://parascene.com).
 
 ## Install
 
-From this repo:
+### From Source
+
+This works right now:
 
 ```bash
+git clone https://github.com/williamsharkey/paratui.git
+cd paratui
 npm install
 npm run build
 npm link
@@ -21,17 +25,82 @@ Without linking globally:
 ./paratui
 ```
 
-Once published to npm:
+### From npm
+
+This is the intended distribution channel for `paratui`.
 
 ```bash
 npm install -g paratui
 paratui
 ```
 
-or:
+Or:
 
 ```bash
 npx paratui
+```
+
+If npm install does not work yet, use the source install above.
+
+## Quick Start
+
+1. Launch `paratui`.
+2. On first run, press `enter` to open the parascene API help page, or press `p` to paste a key you already generated.
+3. Generate an API key in the browser from `Profile > API key`.
+4. Paste the `psn_...` key into `paratui` and press `enter`.
+5. Use the left sidebar to move between `Feed`, `Notifications`, `Settings`, people, and rooms.
+
+## How To Use Paratui
+
+### Main flow
+
+- `up` / `down`: move through the sidebar or the current pane actions
+- `left` / `right`: move through art/feed items, page people, or jump into creation browsing
+- `tab`: move focus between sidebar and main pane
+- `enter` / `space`: invoke the focused TUI button
+- typing in a DM, room, or creation view starts the relevant composer immediately
+- `esc`: back out of input or return from deeper views
+
+### First-run auth
+
+`paratui` uses parascene bearer API keys.
+
+1. Sign into parascene in a normal browser session.
+2. Open `Profile`.
+3. Under `API key`, choose `Generate API key`.
+4. Copy the key immediately. It is shown only once.
+5. Paste it into `paratui`.
+
+Saved config location:
+
+- macOS: `~/Library/Application Support/paratui/config.json`
+- Linux: `$XDG_CONFIG_HOME/paratui/config.json` or `~/.config/paratui/config.json`
+- Windows: `%AppData%/paratui/config.json`
+
+### Chat and browsing
+
+- selecting a person opens the DM view
+- selecting a room opens that room
+- typing in a DM or room and pressing `enter` sends the message
+- selecting a person and pressing `right` opens their creations
+- `left` / `right` scroll through creations and feed items
+- `space` can open preview/full-view actions when those TUI buttons are selected
+- drag-and-drop or paste a local image path to upload and publish quickly while staying in chat
+
+### Headless mode
+
+You can also use `paratui` as a console image-generation client:
+
+```bash
+npx paratui --api-key 'psn_<your-secret>' --prompt 'orbital fungus' --title 'orbital fungus' --server mutations --method chain
+```
+
+### Development commands
+
+```bash
+npm test
+npm run build
+./paratui
 ```
 
 ## Local setup notes
@@ -258,7 +327,7 @@ Chosen shell: **social-first hacker messenger**.
 
 Detailed interaction and macro spec:
 
-- [docs/interaction-model.md](/Users/william/Desktop/paratui/docs/interaction-model.md)
+- [docs/interaction-model.md](docs/interaction-model.md)
 
 ```text
 +------------------------------------------------------------------+

@@ -29,7 +29,7 @@
     "access": "public"
   },
   "bin": {
-    "paratui": "./dist/src/cli.js"
+    "paratui": "dist/src/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
