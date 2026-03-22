@@ -12,6 +12,9 @@ export interface AppConfig {
   audio: {
     muted: boolean;
   };
+  social: {
+    recentRooms: string[];
+  };
   exports: {
     directory: string;
   };
@@ -151,7 +154,7 @@ export interface SlashState {
 
 export interface ComposerState {
   active: boolean;
-  kind: "comment" | null;
+  kind: "comment" | "room" | "dm" | "room_join" | null;
   text: string;
 }
 
@@ -180,6 +183,9 @@ export interface AppState {
     currentIndex: number;
     activity: ActivityItem[];
     ascii: string;
+    selectedCommentIndex: number;
+    commentScrollOffset: number;
+    selectionMode: "comments" | "actions";
   };
   social: {
     threadId: number | null;
@@ -213,6 +219,10 @@ export interface AppState {
   composer: ComposerState;
   slots: Record<"A" | "B" | "C" | "D" | "E", SlotValue | null>;
   previewOpen: boolean;
+  fullView: {
+    open: boolean;
+    ascii: string;
+  };
   exports: {
     lastSavedPath: string | null;
   };
@@ -283,12 +293,16 @@ export interface AppSnapshot {
   };
   slots: Record<string, { assigned: boolean; title: string | null }>;
   previewOpen: boolean;
+  fullView: {
+    open: boolean;
+    asciiLength: number;
+  };
   export: {
     lastSavedPath: string | null;
   };
   composer: {
     active: boolean;
-    kind: "comment" | null;
+    kind: "comment" | "room" | "dm" | "room_join" | null;
     textLength: number;
   };
   slash: {

@@ -513,6 +513,7 @@ export class InteractiveAppHarness {
         PARATUI_TEST_PORT: String(bridge.port),
         PARATUI_CONFIG_DIR: configDir,
         PARATUI_SERVER_BASE_URL: serverBaseUrl,
+        PARATUI_ENABLE_TEST_SLASH: "1",
         PARATUI_DISABLE_EXTERNAL_OPEN: "1",
         TERM: process.env.TERM || "xterm-256color"
       },

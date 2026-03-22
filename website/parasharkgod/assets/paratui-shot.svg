@@ -1,0 +1,71 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1600" height="900" rx="0" fill="#050608"/>
+  <g filter="url(#shadow)">
+    <rect x="110" y="78" width="1380" height="722" rx="34" fill="#FBFBFD"/>
+    <rect x="110" y="78" width="1380" height="62" rx="34" fill="#FBFBFD"/>
+    <path d="M110 140H1490V170H110V140Z" fill="#E9EBFA"/>
+    <circle cx="144" cy="109" r="15" fill="#FF5F56"/>
+    <circle cx="190" cy="109" r="15" fill="#FFBD2E"/>
+    <circle cx="236" cy="109" r="15" fill="#27C93F"/>
+    <rect x="276" y="95" width="30" height="28" rx="4" fill="#BFD5E8"/>
+    <path d="M276 99C276 96.7909 277.791 95 280 95H292L296 99H306V123H276V99Z" fill="#8FB4D6"/>
+    <text x="317" y="120" fill="#5D5F64" font-family="IBM Plex Sans, Arial, sans-serif" font-size="29" font-weight="700">paratui</text>
+
+    <rect x="136" y="165" width="1328" height="566" fill="#F1F2FE" stroke="#53555B" stroke-width="2.2"/>
+    <line x1="136" y1="207" x2="1464" y2="207" stroke="#53555B" stroke-width="2.2"/>
+    <line x1="572" y1="165" x2="572" y2="731" stroke="#53555B" stroke-width="2.2"/>
+    <rect x="136" y="731" width="1328" height="68" fill="#F1F2FE" stroke="#53555B" stroke-width="2.2"/>
+
+    <text x="151" y="196" fill="#383B42" font-family="IBM Plex Mono, monospace" font-size="22">paratui  you:@shark online - room #nematode-power</text>
+    <text x="1434" y="192" fill="#383B42" font-family="IBM Plex Mono, monospace" font-size="24">.</text>
+
+    <text x="141" y="236" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">people</text>
+    <text x="577" y="236" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">users: @shark</text>
+
+    <text x="160" y="290" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">Shark @shark online</text>
+    <text x="160" y="317" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">OceanMan @oceanman offline</text>
+    <text x="160" y="344" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">PaperMan @paperman offline</text>
+    <text x="160" y="371" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">@sausageman offline</text>
+
+    <text x="160" y="436" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">rooms</text>
+    <text x="142" y="463" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">&gt; nematode-power   2</text>
+    <text x="160" y="490" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">parascene-blue</text>
+    <text x="160" y="517" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">testroom</text>
+    <text x="160" y="544" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">shark</text>
+    <text x="160" y="571" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">+ room</text>
+
+    <text x="160" y="637" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">dms</text>
+    <text x="160" y="664" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">OceanMan @oceanman offline</text>
+    <text x="160" y="691" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">PaperMan @paperman offline</text>
+
+    <text x="579" y="280" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">@shark: https://grok.com/imagine/post/83b008b7-5e65-4f3a-be81-bb1683314d97</text>
+    <text x="579" y="307" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">e&amp;platform=web</text>
+    <text x="579" y="334" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">@shark: https://imagine-public.x.ai/imagine-public/share-videos/83b008b7-5e65-4f3a-be81-bbe</text>
+    <text x="579" y="361" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">1683314d97.mp4?cache=1</text>
+
+    <rect x="578" y="392" width="900" height="24" fill="#5F636B"/>
+    <text x="582" y="410" fill="#F1F2FE" font-family="IBM Plex Mono, monospace" font-size="17">chat: i am posting in nematode power from my command station. PARATUI!!!!!</text>
+    <text x="579" y="437" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">enter sends  esc cancels</text>
+
+    <text x="1453" y="292" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">a</text>
+    <text x="1453" y="319" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">b</text>
+    <text x="1453" y="346" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">c</text>
+    <text x="1453" y="373" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">d</text>
+    <text x="1453" y="400" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">e</text>
+
+    <text x="150" y="766" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">type text  enter sends  esc cancels</text>
+    <text x="150" y="793" fill="#44474E" font-family="IBM Plex Mono, monospace" font-size="18">room input</text>
+  </g>
+
+  <defs>
+    <filter id="shadow" x="54" y="42" width="1492" height="834" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="20"/>
+      <feGaussianBlur stdDeviation="28"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.28 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+</svg>

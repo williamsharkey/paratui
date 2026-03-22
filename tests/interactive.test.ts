@@ -50,7 +50,7 @@ test("interactive PTY scripts stay in sync with the live TUI", { concurrency: fa
     });
   });
 
-  await t.test("slash menu suggestions", async () => {
+  await t.test("commands stay scriptable while the visible UI stays keyboard-first", async () => {
     await withApp(async (app) => {
       await runPtmScript(app, path.join(SCRIPT_DIR, "slash-menu.ptm"));
     });

@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>paratui | Keyboard-native Parascene</title>
+  <meta name="description" content="paratui is a keyboard-native terminal interface for Parascene: rooms, DMs, comments, feed browsing, art previews, and headless prompt runs.">
+  <meta property="og:title" content="paratui">
+  <meta property="og:description" content="Keyboard-native Parascene for rooms, DMs, image browsing, comments, and headless runs.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://parasharkgod.com">
+  <meta property="og:image" content="https://parasharkgod.com/assets/paratui-shot.svg">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="site-header">
+      <div class="brand-lockup">
+        <div class="brand-kicker">parasharkgod.com</div>
+        <h1>paratui</h1>
+        <p class="site-tagline">Parascene for keyboard hackers.</p>
+      </div>
+      <nav class="site-nav">
+        <a href="#install">Install</a>
+        <a href="#features">Features</a>
+        <a href="#forge">Parascene Forge</a>
+        <a href="https://github.com/williamsharkey/paratui">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Keyboard-first terminal client</p>
+          <h2>Rooms, DMs, comments, feed, art browsing, and headless runs in one terminal-native shell.</h2>
+          <p class="hero-body">
+            `paratui` is a fast monochrome-first interface into Parascene. It is built for arrow keys, tab focus,
+            fast room hopping, direct messaging, comment posting, image-slot workflows, and command-line automation.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/williamsharkey/paratui">Open GitHub</a>
+            <a class="button" href="#install">Install It</a>
+            <a class="button" href="https://www.parascene.com/help/developer/api">Get API Key</a>
+          </div>
+          <div class="hero-meta">
+            <span>Bearer-key auth</span>
+            <span>Rooms + DMs</span>
+            <span>ASCII image browsing</span>
+            <span>Headless mode</span>
+          </div>
+        </div>
+
+        <div class="hero-shot">
+          <img src="./assets/paratui-shot.svg" alt="Screenshot-style preview of paratui chatting in a room with people, rooms, DMs, and a composer field.">
+        </div>
+      </section>
+
+      <section id="install" class="section install-section">
+        <div class="section-heading">
+          <p class="eyebrow">Install</p>
+          <h3>Use the repo today. Publish-ready for npm next.</h3>
+        </div>
+        <div class="install-grid">
+          <article class="install-card install-card-primary">
+            <h4>Current install</h4>
+            <p>The working path right now is from GitHub.</p>
+            <pre><code>git clone https://github.com/williamsharkey/paratui.git
+cd paratui
+npm install
+npm run build
+npm link
+paratui</code></pre>
+          </article>
+
+          <article class="install-card">
+            <h4>Direct source run</h4>
+            <pre><code>git clone https://github.com/williamsharkey/paratui.git
+cd paratui
+npm install
+./paratui</code></pre>
+          </article>
+
+          <article class="install-card">
+            <h4>Once npm is published</h4>
+            <pre><code>npm install -g paratui
+paratui</code></pre>
+            <p class="small-note">The `paratui` package name is currently free on npm. Publishing still needs an npm login token.</p>
+          </article>
+        </div>
+
+        <div class="auth-callout">
+          <h4>First run</h4>
+          <ol>
+            <li>Sign in to Parascene in the browser.</li>
+            <li>Generate an API key from <strong>Profile &gt; API key</strong>.</li>
+            <li>Launch <code>paratui</code>, press <code>p</code>, paste the <code>psn_...</code> key, and press <code>enter</code>.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="features" class="section">
+        <div class="section-heading">
+          <p class="eyebrow">What it does</p>
+          <h3>Terminal-native social and image workflows.</h3>
+        </div>
+        <div class="feature-grid">
+          <article class="feature-card">
+            <h4>Rooms and DMs</h4>
+            <p>Arrow into public rooms, open DMs, type directly into the focused chat field, and stay on the keyboard.</p>
+          </article>
+          <article class="feature-card">
+            <h4>Browse art fast</h4>
+            <p>ASCII previews stay warm with neighboring renders cached so left and right browsing feels immediate.</p>
+          </article>
+          <article class="feature-card">
+            <h4>Comment without mode switches</h4>
+            <p>Scroll comments under a creation, move to <code>[+ comment]</code>, type, and send.</p>
+          </article>
+          <article class="feature-card">
+            <h4>Preview handoff</h4>
+            <p>Open a full image in the host OS, jump to the saved file or folder, and keep the terminal flow intact.</p>
+          </article>
+          <article class="feature-card">
+            <h4>Headless runs</h4>
+            <p>Use the same project as a CLI for prompt submission, export packing, and scripted workflows.</p>
+          </article>
+          <article class="feature-card">
+            <h4>Simple config</h4>
+            <p>One canonical JSON config stores the bearer token, mute state, export path, and lightweight UI settings.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section command-section">
+        <div class="section-heading">
+          <p class="eyebrow">Example</p>
+          <h3>Headless prompt run</h3>
+        </div>
+        <pre class="wide-command"><code>paratui --api-key 'psn_...' --prompt 'orbital fungus' --title 'orbital fungus' --server mutations --method chain</code></pre>
+      </section>
+
+      <section id="forge" class="section legacy-section">
+        <div class="section-heading">
+          <p class="eyebrow">Moved from the old home page</p>
+          <h3>Parascene Forge</h3>
+        </div>
+        <div class="legacy-card">
+          <div>
+            <p>
+              `parasharkgod.com` used to lead with <strong>Parascene Forge</strong>, the AI server-builder flow for
+              describing, reviewing, testing, and deploying image servers. That material is still part of the story,
+              but it is no longer the main landing experience.
+            </p>
+            <ul>
+              <li>Describe a server idea</li>
+              <li>Review generated code</li>
+              <li>Test a demo server</li>
+              <li>Deploy to Vercel</li>
+            </ul>
+          </div>
+          <div class="legacy-actions">
+            <a class="button" href="https://github.com/williamsharkey/parascene-forge">Forge Repository</a>
+            <a class="button button-quiet" href="https://parascene.com">Open Parascene</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>Built around <a href="https://parascene.com">parascene.com</a>. Website source lives in the <code>paratui</code> repo under <code>website/parasharkgod/</code> and is mirrored into the private deploy repo.</p>
+    </footer>
+  </div>
+</body>
+</html>

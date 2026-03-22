@@ -76,7 +76,10 @@ function createState(): AppState {
       items: [],
       currentIndex: 0,
       activity: [],
-      ascii: ""
+      ascii: "",
+      selectedCommentIndex: 0,
+      commentScrollOffset: 0,
+      selectionMode: "actions"
     },
     social: {
       threadId: null,
@@ -124,6 +127,10 @@ function createState(): AppState {
       E: null
     },
     previewOpen: false,
+    fullView: {
+      open: false,
+      ascii: ""
+    },
     exports: {
       lastSavedPath: null
     }
@@ -167,4 +174,17 @@ test("stacked layout still renders social shell cleanly", () => {
   const screen = renderApp(state, commands, { columns: 60, rows: 20 });
   assert.match(screen, /people/);
   assert.match(screen, /profile @crosshj/);
+});
+
+test("multiline pane content stays inside the pane grid", () => {
+  const state = createState();
+  state.profile!.profile.about = "#tips\n@croskie";
+  const commands = createCommandRegistry();
+  const screen = renderApp(state, commands, { columns: 90, rows: 22 });
+  const lines = screen.split("\n");
+  for (const line of lines) {
+    assert.equal(line.length, 90);
+  }
+  assert.match(screen, /#tips/);
+  assert.match(screen, /@croskie/);
 });

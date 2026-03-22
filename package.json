@@ -2,7 +2,32 @@
   "name": "paratui",
   "version": "0.1.0",
   "private": false,
+  "description": "Keyboard-native TUI for parascene.com",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/williamsharkey/paratui.git"
+  },
+  "homepage": "https://parasharkgod.com",
+  "bugs": {
+    "url": "https://github.com/williamsharkey/paratui/issues"
+  },
+  "keywords": [
+    "parascene",
+    "tui",
+    "cli",
+    "ascii",
+    "terminal"
+  ],
+  "files": [
+    "dist/src/",
+    "paratui",
+    "README.md",
+    "website/parasharkgod/"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "paratui": "./dist/src/cli.js"
   },

@@ -1,12 +1,40 @@
-# Open a public room and post a message.
+# Open a public room from the left pane and post a message.
 /auth/key/set psn_test_sharkgod
-/rooms/open noir
+!assert view=profile
+!press down
+!press down
+!press down
+!press down
+!assert status=selected room noir
+!press enter
 !assert view=room
 !assert room.name=noir
 !assert room.messageCount=2
-!screen-contains room noir
+!screen-contains room #noir
+!screen-contains users:
 !screen-contains dropping rain studies
-/rooms/post text="macro room ping"
+!assert actions.selectedId=chat_compose
+!type macro room ping
+!assert composer.active=true
+!press enter
 !assert room.messageCount=3
 !assert status=room post noir
 !screen-contains macro room ping
+!press escape
+!assert view=profile
+!screen-contains + room
+!press down
+!press down
+!press down
+!press down
+!press down
+!press down
+!assert status=create room
+!press enter
+!assert composer.active=true
+!assert composer.kind=room_join
+!type testroom
+!press enter
+!assert view=room
+!assert room.name=testroom
+!screen-contains room #testroom

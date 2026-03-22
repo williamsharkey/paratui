@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
@@ -14,6 +15,7 @@ import {
 import { loadConfig, saveConfig } from "./config.js";
 import { exportImageWithMetadata, normalizeFormat } from "./export.js";
 import { getFocusActions } from "./focus-actions.js";
+import { findLeftNavIndex, getLeftNavEntries, getLeftNavEntry, type LeftNavEntry } from "./left-nav.js";
 import { calculateLayout, type ViewportSize } from "./layout.js";
 import { assertSnapshotValue, runMacroFile } from "./macros.js";
 import { RealtimeClient } from "./realtime-client.js";
@@ -75,7 +77,10 @@ export class ParatuiApp {
       items: [],
       currentIndex: 0,
       activity: [],
-      ascii: ""
+      ascii: "",
+      selectedCommentIndex: 0,
+      commentScrollOffset: 0,
+      selectionMode: "actions"
     },
     social: {
       threadId: null,
@@ -123,6 +128,10 @@ export class ParatuiApp {
       E: null
     },
     previewOpen: false,
+    fullView: {
+      open: false,
+      ascii: ""
+    },
     exports: {
       lastSavedPath: null
     }
@@ -223,6 +232,11 @@ export class ParatuiApp {
   #lastNonSlashFocus: FocusRegion = "auth";
   #activityCache = new Map<number, Promise<ActivityItem[]>>();
   #peopleRefreshTimer: NodeJS.Timeout | null = null;
+  #terminalUiActive = false;
+  #lastRenderedLines: string[] = [];
+  #lastRenderedViewport: ViewportSize | null = null;
+  #previewProcess: ReturnType<typeof spawn> | null = null;
+  #previewPath: string | null = null;
 
   constructor(options: AppOptions = {}) {
     this.options = options;
@@ -231,6 +245,7 @@ export class ParatuiApp {
   async init(): Promise<void> {
     this.config = await loadConfig();
     this.state.config.audio.muted = this.config.audio.muted;
+    this.state.social.rooms = this.config.social.recentRooms.map((roomName) => recentRoomSummary(roomName));
     this.#client.setBaseUrl(this.config.serverBaseUrl);
     this.#realtime.setUrl(this.config.realtimeBaseUrl);
 
@@ -255,7 +270,7 @@ export class ParatuiApp {
       : "set api key";
 
     if (this.state.authUser) {
-      const initialHandle = this.currentSelectedHandle() || this.state.authUser.handle;
+      const initialHandle = this.preferredHomeHandle() || this.state.authUser.handle;
       await this.openProfile(initialHandle).catch(() => undefined);
     }
 
@@ -350,6 +365,10 @@ export class ParatuiApp {
       },
       slots: slotEntries,
       previewOpen: this.state.previewOpen,
+      fullView: {
+        open: this.state.fullView.open,
+        asciiLength: this.state.fullView.ascii.length
+      },
       export: {
         lastSavedPath: this.state.exports.lastSavedPath
       },
@@ -376,16 +395,36 @@ export class ParatuiApp {
   }
 
   currentSelectedHandle(): string | null {
-    const person = this.state.people.items[this.state.people.selectedIndex];
-    return person?.handle ?? null;
+    const entry = this.currentLeftSelection();
+    if (!entry || entry.kind === "room" || entry.kind === "new-room") {
+      return null;
+    }
+    return entry.handle ?? null;
   }
 
   selectHandle(handle: string): void {
     const normalized = handle.replace(/^@/, "");
-    const index = this.state.people.items.findIndex((person) => person.handle === normalized);
+    const index = findLeftNavIndex(this.state, `person:${normalized}`);
     if (index >= 0) {
       this.state.people.selectedIndex = index;
       this.state.status = `selected @${normalized}`;
+      this.playUiSound("select");
+      return;
+    }
+    const dmIndex = findLeftNavIndex(this.state, `dm:${normalized}`);
+    if (dmIndex >= 0) {
+      this.state.people.selectedIndex = dmIndex;
+      this.state.status = `selected dm @${normalized}`;
+      this.playUiSound("select");
+    }
+  }
+
+  selectRoom(roomName: string): void {
+    const normalized = roomName.replace(/^#/, "").trim().toLowerCase();
+    const index = findLeftNavIndex(this.state, `room:${normalized}`);
+    if (index >= 0) {
+      this.state.people.selectedIndex = index;
+      this.state.status = `selected room ${normalized}`;
       this.playUiSound("select");
     }
   }
@@ -464,28 +503,33 @@ export class ParatuiApp {
       return ["auth"];
     }
     if (this.state.view === "settings") {
-      return this.state.people.items.length ? ["left", "settings"] : ["settings"];
+      return getLeftNavEntries(this.state).length ? ["left", "settings"] : ["settings"];
     }
-    return this.state.people.items.length ? ["left", "center"] : ["center"];
+    return getLeftNavEntries(this.state).length ? ["left", "center"] : ["center"];
   }
 
   private movePersonSelection(delta: number): void {
-    if (!this.state.people.items.length) {
+    const entries = getLeftNavEntries(this.state);
+    if (!entries.length) {
       return;
     }
     const nextIndex = Math.max(
       0,
-      Math.min(this.state.people.selectedIndex + delta, this.state.people.items.length - 1)
+      Math.min(this.state.people.selectedIndex + delta, entries.length - 1)
     );
     if (nextIndex === this.state.people.selectedIndex) {
       return;
     }
     this.state.people.selectedIndex = nextIndex;
-    this.state.status = `selected @${this.currentSelectedHandle() || "none"}`;
+    this.state.status = this.leftSelectionStatus(entries[nextIndex] || null);
     this.playUiSound("focus");
   }
 
   private moveFocusAction(delta: number): void {
+    if (this.state.view === "creation" && this.state.focus === "center" && !this.state.composer.active) {
+      this.moveCreationSelection(delta);
+      return;
+    }
     const actions = this.currentFocusActions();
     if (!actions.length) {
       return;
@@ -494,6 +538,59 @@ export class ParatuiApp {
     if (nextIndex === this.state.actions.selectedIndex) {
       return;
     }
+    this.state.actions.selectedIndex = nextIndex;
+    this.state.status = actions[nextIndex]?.label || this.state.status;
+    this.playUiSound("focus");
+  }
+
+  private moveCreationSelection(delta: number): void {
+    const commentCount = this.state.creations.activity.length;
+    const visibleCommentCount = 4;
+    const actions = this.currentFocusActions("center");
+
+    if (!commentCount) {
+      this.state.creations.selectionMode = "actions";
+      const nextIndex = Math.max(0, Math.min(this.clampedActionIndex(actions) + delta, Math.max(0, actions.length - 1)));
+      this.state.actions.selectedIndex = nextIndex;
+      this.state.status = actions[nextIndex]?.label || this.state.status;
+      this.playUiSound("focus");
+      return;
+    }
+
+    if (this.state.creations.selectionMode === "comments") {
+      if (delta > 0) {
+        if (this.state.creations.selectedCommentIndex < commentCount - 1) {
+          this.state.creations.selectedCommentIndex += 1;
+          if (this.state.creations.selectedCommentIndex >= this.state.creations.commentScrollOffset + visibleCommentCount) {
+            this.state.creations.commentScrollOffset += 1;
+          }
+          this.state.status = `comment ${this.state.creations.selectedCommentIndex + 1}/${commentCount}`;
+        } else {
+          this.state.creations.selectionMode = "actions";
+          this.state.actions.selectedIndex = 0;
+          this.state.status = actions[0]?.label || this.state.status;
+        }
+      } else if (delta < 0 && this.state.creations.selectedCommentIndex > 0) {
+        this.state.creations.selectedCommentIndex -= 1;
+        if (this.state.creations.selectedCommentIndex < this.state.creations.commentScrollOffset) {
+          this.state.creations.commentScrollOffset = this.state.creations.selectedCommentIndex;
+        }
+        this.state.status = `comment ${this.state.creations.selectedCommentIndex + 1}/${commentCount}`;
+      }
+      this.playUiSound("focus");
+      return;
+    }
+
+    if (delta < 0 && this.state.actions.selectedIndex === 0) {
+      this.state.creations.selectionMode = "comments";
+      this.state.creations.selectedCommentIndex = commentCount - 1;
+      this.state.creations.commentScrollOffset = Math.max(0, commentCount - visibleCommentCount);
+      this.state.status = `comment ${commentCount}/${commentCount}`;
+      this.playUiSound("focus");
+      return;
+    }
+
+    const nextIndex = Math.max(0, Math.min(this.clampedActionIndex(actions) + delta, Math.max(0, actions.length - 1)));
     this.state.actions.selectedIndex = nextIndex;
     this.state.status = actions[nextIndex]?.label || this.state.status;
     this.playUiSound("focus");
@@ -556,8 +653,30 @@ export class ParatuiApp {
   }
 
   private async invokeFocusedAction(): Promise<void> {
-    if (this.state.focus === "left" && this.currentSelectedHandle()) {
-      await this.openProfile(this.currentSelectedHandle()!);
+    if (this.state.focus === "left") {
+      const selection = this.currentLeftSelection();
+      if (!selection) {
+        return;
+      }
+      if (selection.kind === "person" && selection.handle) {
+        await this.openProfile(selection.handle);
+        return;
+      }
+      if (selection.kind === "dm" && selection.handle) {
+        await this.openDm(selection.handle);
+        return;
+      }
+      if (selection.kind === "room" && selection.roomName) {
+        await this.openRoom(selection.roomName);
+        return;
+      }
+      if (selection.kind === "new-room") {
+        this.startRoomJoinComposer();
+        return;
+      }
+      return;
+    }
+    if (this.state.view === "creation" && this.state.creations.selectionMode === "comments") {
       return;
     }
     const action = this.selectedFocusAction();
@@ -583,6 +702,11 @@ export class ParatuiApp {
           await this.openCreations(this.currentSelectedHandle()!);
         }
         break;
+      case "open_dm":
+        if (this.currentSelectedHandle()) {
+          await this.openDm(this.currentSelectedHandle()!);
+        }
+        break;
       case "open_feed":
         await this.openFeed();
         break;
@@ -598,8 +722,26 @@ export class ParatuiApp {
       case "toggle_preview":
         await this.togglePreview();
         break;
+      case "toggle_full_view":
+        await this.toggleFullView();
+        break;
+      case "comment_compose":
+        this.startCommentComposer();
+        break;
+      case "chat_compose":
+        this.startChatComposer("room");
+        break;
+      case "dm_compose":
+        this.startChatComposer("dm");
+        break;
       case "save_art":
         await this.saveCurrentArt("png");
+        break;
+      case "open_saved_art":
+        await this.openSavedArt();
+        break;
+      case "open_saved_folder":
+        await this.openSavedArtFolder();
         break;
       case "previous_feed":
         await this.previousFeed();
@@ -643,6 +785,10 @@ export class ParatuiApp {
     await this.executeCommandString(commandLine.trimEnd());
   }
 
+  private testSlashEnabled(): boolean {
+    return process.env.PARATUI_ENABLE_TEST_SLASH === "1";
+  }
+
   async refreshPeople(): Promise<void> {
     this.ensureAuthenticated();
     const people = await this.#client.listUsers();
@@ -668,7 +814,7 @@ export class ParatuiApp {
     this.state.actions.selectedIndex = 0;
     await this.refreshPeople().catch(() => undefined);
     await this.loadSocialLists();
-    const initialHandle = this.currentSelectedHandle() || result.user.handle;
+    const initialHandle = this.preferredHomeHandle() || result.user.handle;
     await this.openProfile(initialHandle).catch(() => {
       this.state.profile = null;
     });
@@ -721,6 +867,8 @@ export class ParatuiApp {
   async openCreations(handle: string): Promise<void> {
     this.ensureAuthenticated();
     this.selectHandle(handle);
+    await this.closePreview();
+    this.state.exports.lastSavedPath = null;
     this.state.creations.ownerHandle = handle;
     this.state.creations.items = await this.#client.loadCreations(handle);
     this.state.creations.currentIndex = 0;
@@ -736,11 +884,15 @@ export class ParatuiApp {
     if (!this.state.creations.items.length) {
       throw new Error("No creations loaded");
     }
+    this.state.exports.lastSavedPath = null;
     this.state.creations.currentIndex = Math.min(
       this.state.creations.currentIndex + 1,
       this.state.creations.items.length - 1
     );
     await this.loadCurrentCreationDetail();
+    if (this.state.previewOpen) {
+      await this.openPreviewForCurrentArt();
+    }
     this.state.status = `art ${this.state.creations.currentIndex + 1}/${this.state.creations.items.length}`;
     this.playUiSound("select");
   }
@@ -749,15 +901,36 @@ export class ParatuiApp {
     if (!this.state.creations.items.length) {
       throw new Error("No creations loaded");
     }
+    this.state.exports.lastSavedPath = null;
     this.state.creations.currentIndex = Math.max(this.state.creations.currentIndex - 1, 0);
     await this.loadCurrentCreationDetail();
+    if (this.state.previewOpen) {
+      await this.openPreviewForCurrentArt();
+    }
     this.state.status = `art ${this.state.creations.currentIndex + 1}/${this.state.creations.items.length}`;
     this.playUiSound("select");
   }
 
   async togglePreview(): Promise<void> {
-    this.state.previewOpen = !this.state.previewOpen;
-    this.state.status = this.state.previewOpen ? "preview open" : "preview closed";
+    if (this.state.previewOpen) {
+      await this.closePreview();
+      this.state.status = "preview closed";
+      return;
+    }
+    await this.openPreviewForCurrentArt();
+    this.state.status = "preview open";
+    this.playUiSound("select");
+  }
+
+  async toggleFullView(): Promise<void> {
+    if (this.state.fullView.open) {
+      this.state.fullView.open = false;
+      this.state.status = "full view closed";
+      return;
+    }
+    await this.refreshFullViewAscii();
+    this.state.fullView.open = true;
+    this.state.status = "full view";
     this.playUiSound("select");
   }
 
@@ -799,6 +972,9 @@ export class ParatuiApp {
     await this.#client.addComment(current.id, text);
     this.#activityCache.delete(current.id);
     await this.loadCurrentCreationDetail();
+    this.state.composer.active = false;
+    this.state.composer.kind = null;
+    this.state.composer.text = "";
     this.state.status = "comment posted";
     this.playUiSound("select");
   }
@@ -823,7 +999,12 @@ export class ParatuiApp {
   async openDm(handle: string): Promise<void> {
     this.ensureAuthenticated();
     const normalized = handle.replace(/^@/, "");
+    const remembered = this.state.social.dms.find((entry) => entry.handle === normalized) || null;
     const data = await this.#client.loadDmMessages(normalized);
+    if (remembered && data.dm.displayName === data.dm.handle) {
+      data.dm.displayName = remembered.displayName;
+      data.dm.online = remembered.online;
+    }
     this.state.social.dmHandle = data.dm.handle;
     this.state.social.roomName = null;
     this.state.social.threadId = data.threadId;
@@ -858,6 +1039,7 @@ export class ParatuiApp {
     this.state.social.threadId = data.threadId;
     this.state.social.threadMessages = data.messages;
     this.rememberRoom(data.room);
+    this.selectRoom(data.room.name);
     this.state.view = "room";
     this.state.focus = "center";
     this.#lastNonSlashFocus = "center";
@@ -880,6 +1062,7 @@ export class ParatuiApp {
 
   async openFeed(): Promise<void> {
     this.ensureAuthenticated();
+    this.state.exports.lastSavedPath = null;
     this.state.feed.items = await this.#client.loadLatestFeed();
     this.state.feed.currentIndex = 0;
     this.state.view = "feed";
@@ -972,6 +1155,7 @@ export class ParatuiApp {
     if (!this.state.feed.items.length) {
       throw new Error("Feed is empty");
     }
+    this.state.exports.lastSavedPath = null;
     this.state.feed.currentIndex = Math.min(this.state.feed.currentIndex + 1, this.state.feed.items.length - 1);
     await this.loadCurrentFeedDetail();
     this.state.status = `feed ${this.state.feed.currentIndex + 1}/${this.state.feed.items.length}`;
@@ -982,6 +1166,7 @@ export class ParatuiApp {
     if (!this.state.feed.items.length) {
       throw new Error("Feed is empty");
     }
+    this.state.exports.lastSavedPath = null;
     this.state.feed.currentIndex = Math.max(this.state.feed.currentIndex - 1, 0);
     await this.loadCurrentFeedDetail();
     this.state.status = `feed ${this.state.feed.currentIndex + 1}/${this.state.feed.items.length}`;
@@ -1042,13 +1227,35 @@ export class ParatuiApp {
     return outputPath;
   }
 
+  async openSavedArt(): Promise<void> {
+    const savedPath = this.state.exports.lastSavedPath;
+    if (!savedPath) {
+      throw new Error("No saved art yet");
+    }
+    await this.openExternalTarget(savedPath);
+    this.state.status = `opened ${path.basename(savedPath)}`;
+  }
+
+  async openSavedArtFolder(): Promise<void> {
+    const savedPath = this.state.exports.lastSavedPath;
+    if (!savedPath) {
+      throw new Error("No saved art yet");
+    }
+    await this.openExternalTarget(path.dirname(savedPath));
+    this.state.status = `opened folder ${path.basename(path.dirname(savedPath))}`;
+  }
+
   openSlash(): void {
+    this.openSlashWithInput("/");
+  }
+
+  openSlashWithInput(input: string): void {
     this.state.authInput.active = false;
     if (this.state.focus !== "slash") {
       this.#lastNonSlashFocus = this.state.focus;
     }
     this.state.slash.open = true;
-    this.state.slash.input = "/";
+    this.state.slash.input = input;
     this.state.slash.selectedIndex = 0;
     this.state.focus = "slash";
     this.state.status = "slash";
@@ -1064,12 +1271,57 @@ export class ParatuiApp {
     this.state.status = initialDraft ? "paste api key" : "api key input";
   }
 
+  startCommentComposer(initialDraft = ""): void {
+    this.state.composer.active = true;
+    this.state.composer.kind = "comment";
+    this.state.composer.text = initialDraft;
+    this.state.focus = "center";
+    this.#lastNonSlashFocus = "center";
+    this.state.status = initialDraft ? "edit comment" : "comment input";
+  }
+
+  startChatComposer(kind: "room" | "dm", initialDraft = ""): void {
+    this.state.composer.active = true;
+    this.state.composer.kind = kind;
+    this.state.composer.text = initialDraft;
+    this.state.focus = "center";
+    this.#lastNonSlashFocus = "center";
+    this.state.status = initialDraft ? `${kind} draft` : `${kind} input`;
+  }
+
+  startRoomJoinComposer(initialDraft = ""): void {
+    this.state.composer.active = true;
+    this.state.composer.kind = "room_join";
+    this.state.composer.text = initialDraft;
+    this.state.focus = "center";
+    this.#lastNonSlashFocus = "center";
+    this.state.status = initialDraft ? "room draft" : "join room";
+  }
+
   cancelApiKeyEntry(): void {
     this.state.authInput.active = false;
     this.state.authInput.draft = "";
     this.state.focus = "auth";
     this.#lastNonSlashFocus = "auth";
     this.state.status = "api key input cancelled";
+  }
+
+  cancelComposer(): void {
+    const cancelledKind = this.state.composer.kind;
+    this.state.composer.active = false;
+    this.state.composer.kind = null;
+    this.state.composer.text = "";
+    if (cancelledKind === "room_join") {
+      this.state.focus = "left";
+      this.#lastNonSlashFocus = "left";
+      this.state.status = "room join cancelled";
+      return;
+    }
+    this.state.status = cancelledKind === "dm"
+      ? "dm cancelled"
+      : cancelledKind === "room"
+        ? "chat cancelled"
+        : "comment cancelled";
   }
 
   async submitApiKeyDraft(): Promise<void> {
@@ -1079,18 +1331,58 @@ export class ParatuiApp {
     await this.setApiKey(this.state.authInput.draft);
   }
 
+  async submitComposer(): Promise<void> {
+    const text = this.state.composer.text.trim();
+    if (!text) {
+      throw new Error("Type something first");
+    }
+    if (this.state.composer.kind === "comment") {
+      await this.addComment(text);
+      return;
+    }
+    if (this.state.composer.kind === "room") {
+      await this.postRoomMessage(text);
+      this.state.composer.active = false;
+      this.state.composer.kind = null;
+      this.state.composer.text = "";
+      return;
+    }
+    if (this.state.composer.kind === "dm") {
+      await this.sendDm(text);
+      this.state.composer.active = false;
+      this.state.composer.kind = null;
+      this.state.composer.text = "";
+      return;
+    }
+    if (this.state.composer.kind === "room_join") {
+      this.state.composer.active = false;
+      this.state.composer.kind = null;
+      this.state.composer.text = "";
+      await this.openRoom(text);
+      return;
+    }
+  }
+
   async openApiKeyHelp(): Promise<void> {
     const url = "https://www.parascene.com/help/developer/api";
+    await this.openExternalTarget(url);
+    if (this.state.status !== url) {
+      this.state.status = "opened api key help";
+      this.playUiSound("select");
+    }
+  }
+
+  private async openExternalTarget(target: string): Promise<void> {
     if (this.config.preview.disableExternalOpen) {
-      this.state.status = url;
+      this.state.status = target;
       return;
     }
 
     const opener = process.platform === "darwin"
-      ? { command: "open", args: [url] }
+      ? { command: "open", args: [target] }
       : process.platform === "win32"
-        ? { command: "cmd", args: ["/c", "start", "", url] }
-        : { command: "xdg-open", args: [url] };
+        ? { command: "cmd", args: ["/c", "start", "", target] }
+        : { command: "xdg-open", args: [target] };
 
     try {
       const child = spawn(opener.command, opener.args, {
@@ -1098,14 +1390,17 @@ export class ParatuiApp {
         stdio: "ignore"
       });
       child.unref();
-      this.state.status = "opened api key help";
-      this.playUiSound("select");
     } catch {
-      this.state.status = url;
+      this.state.status = target;
     }
   }
 
   async cancel(): Promise<void> {
+    if (this.state.composer.active) {
+      this.cancelComposer();
+      return;
+    }
+
     if (this.state.authInput.active) {
       this.cancelApiKeyEntry();
       return;
@@ -1118,8 +1413,9 @@ export class ParatuiApp {
     }
 
     if (this.state.view === "settings") {
-      if (this.currentSelectedHandle()) {
-        await this.openProfile(this.currentSelectedHandle()!);
+      const fallbackHandle = this.currentSelectedHandle() || this.state.profile?.profile.user_name || this.state.authUser?.handle || null;
+      if (fallbackHandle) {
+        await this.openProfile(fallbackHandle);
       } else {
         this.state.view = "profile";
       }
@@ -1133,8 +1429,9 @@ export class ParatuiApp {
       return;
     }
 
-    if ((this.state.view === "dm" || this.state.view === "room" || this.state.view === "feed" || this.state.view === "live") && this.currentSelectedHandle()) {
-      await this.openProfile(this.currentSelectedHandle()!);
+    const fallbackHandle = this.currentSelectedHandle() || this.state.profile?.profile.user_name || this.state.authUser?.handle || null;
+    if ((this.state.view === "dm" || this.state.view === "room" || this.state.view === "feed" || this.state.view === "live") && fallbackHandle) {
+      await this.openProfile(fallbackHandle);
       this.state.status = "back";
     }
   }
@@ -1174,10 +1471,15 @@ export class ParatuiApp {
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(true);
     }
+    this.activateTerminalUi();
     this.startPeopleRefreshLoop();
+    this.render();
 
     const onResize = () => {
       this.#viewport = this.readViewport();
+      if (this.state.fullView.open) {
+        void this.refreshFullViewAscii().catch(() => undefined);
+      }
       this.render();
       this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
       void this.refreshVisibleAsciiForViewport()
@@ -1199,37 +1501,9 @@ export class ParatuiApp {
           return;
         }
 
-        if (this.state.slash.open) {
-          if (key.name === "escape") {
-            await this.cancel();
-          } else if (key.name === "backspace") {
-            if (this.state.slash.input.length > 1) {
-              this.state.slash.input = this.state.slash.input.slice(0, -1);
-            } else {
-              this.state.slash.input = "/";
-            }
-            this.state.slash.selectedIndex = 0;
-          } else if (key.name === "tab") {
-            this.completeSlashInput();
-          } else if (key.name === "left") {
-            this.moveSlashSelection(-1);
-          } else if (key.name === "right") {
-            this.moveSlashSelection(1);
-          } else if (key.name === "return") {
-            await this.submitSlashSelection();
-            return;
-          } else if (key.name === "space") {
-            const exactCommand = this.commands.find((command) => command.path === this.currentSlashPath());
-            if (!/\s/.test(this.state.slash.input.trim()) && this.currentSlashMatches().length && !exactCommand) {
-              await this.submitSlashSelection();
-              return;
-            }
-            this.state.slash.input += " ";
-            this.state.slash.selectedIndex = 0;
-          } else if (str && !key.ctrl && !key.meta && !["return"].includes(key.name || "")) {
-            this.state.slash.input += str;
-            this.state.slash.selectedIndex = 0;
-          }
+        if (this.state.fullView.open) {
+          this.state.fullView.open = false;
+          this.state.status = "full view closed";
           this.render();
           this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
           return;
@@ -1242,6 +1516,8 @@ export class ParatuiApp {
             this.state.authInput.draft = this.state.authInput.draft.slice(0, -1);
           } else if (key.name === "return") {
             await this.submitApiKeyDraft();
+            this.render();
+            this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
             return;
           } else if (str && !key.ctrl && !key.meta) {
             this.state.authInput.draft += str.replace(/[\r\n]/g, "");
@@ -1251,8 +1527,96 @@ export class ParatuiApp {
           return;
         }
 
-        if (str === "/") {
+        if (this.state.composer.active) {
+          if (key.name === "escape") {
+            this.cancelComposer();
+          } else if (key.name === "backspace") {
+            this.state.composer.text = this.state.composer.text.slice(0, -1);
+          } else if (key.name === "return") {
+            await this.submitComposer();
+            this.render();
+            this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
+            return;
+          } else if (str && !key.ctrl && !key.meta) {
+            this.state.composer.text += str.replace(/[\r\n]/g, "");
+          }
+          this.render();
+          this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
+          return;
+        }
+
+        if (this.testSlashEnabled() && this.state.slash.open) {
+          if (key.name === "escape") {
+            this.closeSlash();
+            this.state.status = "command cancelled";
+          } else if (key.name === "backspace") {
+            this.state.slash.input = this.state.slash.input.length > 1
+              ? this.state.slash.input.slice(0, -1)
+              : "/";
+            this.state.slash.selectedIndex = 0;
+          } else if (key.name === "return") {
+            await this.submitSlashSelection();
+            return;
+          } else if (key.name === "tab") {
+            this.completeSlashInput();
+          } else if (key.name === "left") {
+            this.moveSlashSelection(-1);
+          } else if (key.name === "right") {
+            this.moveSlashSelection(1);
+          } else if (str && !key.ctrl && !key.meta) {
+            this.state.slash.input += str.replace(/[\r\n]/g, "");
+            this.state.slash.selectedIndex = 0;
+            this.state.status = this.selectedSlashCommand()?.path || this.state.slash.input;
+          }
+          this.render();
+          this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
+          return;
+        }
+
+        if (this.testSlashEnabled() && str === "/" && !key.ctrl && !key.meta) {
           this.openSlash();
+          this.render();
+          this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
+          return;
+        }
+
+        if (
+          str &&
+          !key.ctrl &&
+          !key.meta &&
+          this.state.focus === "center" &&
+          !this.state.composer.active
+        ) {
+          const action = this.selectedFocusAction();
+          if (this.state.view === "creation" && action?.id === "comment_compose") {
+            this.startCommentComposer(str.replace(/[\r\n]/g, ""));
+            this.render();
+            this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
+            return;
+          }
+          if (this.state.view === "room" && action?.id === "chat_compose") {
+            this.startChatComposer("room", str.replace(/[\r\n]/g, ""));
+            this.render();
+            this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
+            return;
+          }
+          if (this.state.view === "dm" && action?.id === "dm_compose") {
+            this.startChatComposer("dm", str.replace(/[\r\n]/g, ""));
+            this.render();
+            this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
+            return;
+          }
+        }
+
+        if (
+          str &&
+          !key.ctrl &&
+          !key.meta &&
+          this.state.focus === "left" &&
+          this.currentLeftSelection()?.kind === "new-room" &&
+          !this.state.composer.active
+        ) {
+          this.startRoomJoinComposer(str.replace(/[\r\n]/g, ""));
           this.render();
           this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
           return;
@@ -1285,10 +1649,21 @@ export class ParatuiApp {
           this.moveFocusAction(-1);
         } else if (key.name === "down" && this.state.focus !== "left") {
           this.moveFocusAction(1);
-        } else if ((key.name === "return" || key.name === "space") && this.state.focus !== "slash") {
+        } else if (key.name === "left" && (this.state.view === "room" || this.state.view === "dm") && this.state.focus === "center") {
+          await this.cancel();
+        } else if ((key.name === "return" || key.name === "space")) {
           await this.invokeFocusedAction();
-        } else if (key.name === "right" && this.state.view === "profile" && this.currentSelectedHandle()) {
-          await this.openCreations(this.currentSelectedHandle()!);
+        } else if (key.name === "right" && this.state.view === "profile" && this.state.focus === "left") {
+          const selection = this.currentLeftSelection();
+          if (selection?.kind === "person" && selection.handle) {
+            await this.openCreations(selection.handle);
+          } else if (selection?.kind === "dm" && selection.handle) {
+            await this.openDm(selection.handle);
+          } else if (selection?.kind === "room" && selection.roomName) {
+            await this.openRoom(selection.roomName);
+          } else if (selection?.kind === "new-room") {
+            this.startRoomJoinComposer();
+          }
         } else if (key.name === "left" && this.state.view === "creation") {
           await this.previousCreation();
         } else if (key.name === "right" && this.state.view === "creation") {
@@ -1331,14 +1706,14 @@ export class ParatuiApp {
     }
     this.#viewport = this.readViewport();
     const screen = renderApp(this.state, this.commands, this.#viewport);
-    process.stdout.write("\x1b[2J\x1b[H");
-    process.stdout.write(screen);
+    this.paintScreen(screen);
     this.bridge.emit({ type: "state", snapshot: this.snapshot() });
   }
 
   shutdown(): void {
     void this.#realtime.disconnect().catch(() => undefined);
     this.stopPeopleRefreshLoop();
+    this.deactivateTerminalUi();
     if (this.#runningInteractive && process.stdin.isTTY) {
       process.stdin.setRawMode(false);
     }
@@ -1372,6 +1747,9 @@ export class ParatuiApp {
     const [ascii, activity] = await Promise.all([asciiPromise, activityPromise]);
     this.state.creations.ascii = ascii;
     this.state.creations.activity = activity;
+    this.state.creations.selectedCommentIndex = Math.max(0, Math.min(this.state.creations.selectedCommentIndex, Math.max(0, activity.length - 1)));
+    this.state.creations.commentScrollOffset = Math.max(0, Math.min(this.state.creations.commentScrollOffset, this.state.creations.selectedCommentIndex));
+    this.state.creations.selectionMode = activity.length ? "comments" : "actions";
     this.preloadCreationNeighborhood();
   }
 
@@ -1391,10 +1769,11 @@ export class ParatuiApp {
   private currentCreationAsciiSize(): AsciiRenderSize {
     const layout = calculateLayout(this.#viewport);
     const availableWidth = layout.mode === "columns" ? layout.centerWidth : layout.contentWidth;
-    const actionRows = getFocusActions(this.state, "center").length + 1;
-    const reservedRows = layout.mode === "compact"
-      ? 6
-      : 7 + actionRows + 6;
+    const commentRows = Math.min(this.state.creations.activity.length, 4);
+    const footerRows = this.state.composer.active && this.state.composer.kind === "comment"
+      ? 3
+      : getFocusActions(this.state, "center").length + 1;
+    const reservedRows = (commentRows ? commentRows + 1 : 0) + footerRows + 1;
     return {
       width: Math.max(18, availableWidth - 2),
       height: Math.max(8, layout.bodyHeight - reservedRows)
@@ -1404,10 +1783,18 @@ export class ParatuiApp {
   private currentFeedAsciiSize(): AsciiRenderSize {
     const layout = calculateLayout(this.#viewport);
     const availableWidth = layout.mode === "columns" ? layout.centerWidth : layout.contentWidth;
-    const reservedRows = layout.mode === "compact" ? 5 : 8;
+    const footerRows = getFocusActions(this.state, "center").length + 1;
+    const reservedRows = footerRows + 3;
     return {
       width: Math.max(18, availableWidth - 2),
       height: Math.max(8, layout.bodyHeight - reservedRows)
+    };
+  }
+
+  private currentFullAsciiSize(): AsciiRenderSize {
+    return {
+      width: Math.max(24, this.#viewport.columns - 2),
+      height: Math.max(8, this.#viewport.rows - 2)
     };
   }
 
@@ -1487,6 +1874,19 @@ export class ParatuiApp {
     }
   }
 
+  private async refreshFullViewAscii(): Promise<void> {
+    const creation = this.currentCreation() || this.currentFeedItem();
+    if (!creation?.url) {
+      this.state.fullView.ascii = "";
+      return;
+    }
+    this.state.fullView.ascii = await this.asciiCache.get(
+      creation.url,
+      this.currentFullAsciiSize(),
+      () => this.#client.fetchImageBuffer(creation.url!)
+    );
+  }
+
   private async loadSocialLists(): Promise<void> {
     if (!this.state.authUser) {
       return;
@@ -1496,10 +1896,10 @@ export class ParatuiApp {
         this.#client.listRooms(),
         this.#client.listDms()
       ]);
-      this.state.social.rooms = rooms;
+      this.state.social.rooms = mergeRoomSummaries(rooms, this.config.social.recentRooms.map((roomName) => recentRoomSummary(roomName)));
       this.state.social.dms = dms;
     } catch {
-      this.state.social.rooms = [];
+      this.state.social.rooms = this.config.social.recentRooms.map((roomName) => recentRoomSummary(roomName));
       this.state.social.dms = [];
     }
   }
@@ -1514,19 +1914,23 @@ export class ParatuiApp {
     const next = this.state.social.rooms.filter((entry) => entry.name !== room.name);
     next.unshift(room);
     this.state.social.rooms = next.slice(0, 12);
+    this.config.social.recentRooms = this.state.social.rooms.map((entry) => entry.name).slice(0, 12);
+    void saveConfig(this.config);
   }
 
-  private async refreshPeoplePresence(): Promise<void> {
+  private async refreshPeoplePresence(): Promise<boolean> {
     this.ensureAuthenticated();
     const people = await this.#client.listPresenceUsers();
     if (!people) {
-      return;
+      return false;
     }
+    const before = this.peopleSignature();
     this.applyPeopleList(people);
+    return before !== this.peopleSignature();
   }
 
   private applyPeopleList(people: CliUserSummary[]): void {
-    const previousHandle = this.currentSelectedHandle();
+    const previousKey = this.currentLeftSelection()?.key || null;
     const filtered = people.filter((person) => person.handle);
     if (!filtered.some((person) => person.handle === this.state.authUser?.handle)) {
       filtered.unshift({
@@ -1540,9 +1944,7 @@ export class ParatuiApp {
       });
     }
     this.state.people.items = filtered;
-    const preservedIndex = previousHandle
-      ? filtered.findIndex((person) => person.handle === previousHandle)
-      : -1;
+    const preservedIndex = previousKey ? findLeftNavIndex(this.state, previousKey) : -1;
     if (preservedIndex >= 0) {
       this.state.people.selectedIndex = preservedIndex;
       return;
@@ -1558,7 +1960,10 @@ export class ParatuiApp {
         return;
       }
       void this.refreshPeoplePresence()
-        .then(() => {
+        .then((changed) => {
+          if (!changed) {
+            return;
+          }
           this.render();
           this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
         })
@@ -1572,6 +1977,34 @@ export class ParatuiApp {
     }
     clearInterval(this.#peopleRefreshTimer);
     this.#peopleRefreshTimer = null;
+  }
+
+  private activateTerminalUi(): void {
+    if (this.options.headless || this.#terminalUiActive) {
+      return;
+    }
+    process.stdout.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[2J\x1b[H");
+    this.#terminalUiActive = true;
+    this.#lastRenderedLines = [];
+    this.#lastRenderedViewport = null;
+  }
+
+  private deactivateTerminalUi(): void {
+    if (this.options.headless || !this.#terminalUiActive) {
+      return;
+    }
+    process.stdout.write("\x1b[?7h\x1b[?25h\x1b[?1049l");
+    this.#terminalUiActive = false;
+    this.#lastRenderedLines = [];
+    this.#lastRenderedViewport = null;
+  }
+
+  private peopleSignature(): string {
+    return JSON.stringify(this.state.people.items.map((person) => ({
+      handle: person.handle,
+      online: person.online,
+      lastActiveAt: person.lastActiveAt
+    })));
   }
 
   private ensureAuthenticated(): asserts this is this & { state: { authUser: CliAuthUser } } {
@@ -1612,4 +2045,141 @@ export class ParatuiApp {
       rows
     };
   }
+
+  private paintScreen(screen: string): void {
+    const nextLines = screen.split("\n");
+    const viewportChanged = !this.#lastRenderedViewport
+      || this.#lastRenderedViewport.columns !== this.#viewport.columns
+      || this.#lastRenderedViewport.rows !== this.#viewport.rows;
+
+    if (!this.#terminalUiActive || viewportChanged || this.#lastRenderedLines.length !== nextLines.length) {
+      process.stdout.write("\x1b[H\x1b[2J");
+      process.stdout.write(nextLines.join("\n"));
+      this.#lastRenderedLines = nextLines;
+      this.#lastRenderedViewport = { ...this.#viewport };
+      return;
+    }
+
+    let output = "";
+    for (let index = 0; index < nextLines.length; index += 1) {
+      if (nextLines[index] === this.#lastRenderedLines[index]) {
+        continue;
+      }
+      output += `\x1b[${index + 1};1H`;
+      output += nextLines[index] || "";
+    }
+    if (output) {
+      process.stdout.write(output);
+    }
+    this.#lastRenderedLines = nextLines;
+    this.#lastRenderedViewport = { ...this.#viewport };
+  }
+
+  private async openPreviewForCurrentArt(): Promise<void> {
+    const previewPath = await this.ensurePreviewPath();
+    this.#previewPath = previewPath;
+    if (this.config.preview.disableExternalOpen) {
+      this.state.previewOpen = true;
+      this.state.status = previewPath;
+      return;
+    }
+
+    if (process.platform === "darwin") {
+      await this.closePreview(false);
+      const child = spawn("qlmanage", ["-p", previewPath], {
+        stdio: "ignore"
+      });
+      child.unref();
+      this.#previewProcess = child;
+      child.on("exit", () => {
+        if (this.#previewProcess === child) {
+          this.#previewProcess = null;
+          this.state.previewOpen = false;
+        }
+      });
+    } else {
+      await this.openExternalTarget(previewPath);
+    }
+    this.state.previewOpen = true;
+  }
+
+  private async closePreview(updateStatus = true): Promise<void> {
+    if (this.#previewProcess && !this.#previewProcess.killed) {
+      this.#previewProcess.kill("SIGTERM");
+      this.#previewProcess = null;
+    }
+    this.state.previewOpen = false;
+    if (updateStatus) {
+      this.state.status = "preview closed";
+    }
+  }
+
+  private async ensurePreviewPath(): Promise<string> {
+    const creation = this.currentCreation() || this.currentFeedItem();
+    if (!creation?.url) {
+      throw new Error("No art to preview");
+    }
+
+    const extension = path.extname(new URL(creation.url, this.config.serverBaseUrl).pathname) || ".png";
+    const fileName = `paratui-preview-${creation.id}${extension}`;
+    const previewPath = path.join(os.tmpdir(), fileName);
+    const buffer = await this.#client.fetchImageBuffer(creation.url);
+    await fs.writeFile(previewPath, buffer);
+    return previewPath;
+  }
+
+  private currentLeftSelection(): LeftNavEntry | null {
+    return getLeftNavEntry(this.state, this.state.people.selectedIndex);
+  }
+
+  private preferredHomeHandle(): string | null {
+    const firstOtherPerson = this.state.people.items.find((person) => person.handle !== this.state.authUser?.handle);
+    if (firstOtherPerson?.handle) {
+      return firstOtherPerson.handle;
+    }
+    const firstDm = this.state.social.dms.find((dm) => dm.handle !== this.state.authUser?.handle);
+    if (firstDm?.handle) {
+      return firstDm.handle;
+    }
+    return this.currentSelectedHandle();
+  }
+
+  private leftSelectionStatus(entry: LeftNavEntry | null): string {
+    if (!entry) {
+      return "selected none";
+    }
+    if (entry.kind === "person" && entry.handle) {
+      return `selected @${entry.handle}`;
+    }
+    if (entry.kind === "dm" && entry.handle) {
+      return `selected dm @${entry.handle}`;
+    }
+    if (entry.kind === "room" && entry.roomName) {
+      return `selected room ${entry.roomName}`;
+    }
+    return "create room";
+  }
+}
+
+function recentRoomSummary(roomName: string): RoomSummary {
+  const normalized = String(roomName || "").replace(/^#/, "").trim().toLowerCase();
+  return {
+    name: normalized,
+    title: `#${normalized}`,
+    messageCount: 0,
+    lastMessageText: null
+  };
+}
+
+function mergeRoomSummaries(primary: RoomSummary[], secondary: RoomSummary[]): RoomSummary[] {
+  const merged = new Map<string, RoomSummary>();
+  for (const room of [...primary, ...secondary]) {
+    if (!room?.name) {
+      continue;
+    }
+    if (!merged.has(room.name)) {
+      merged.set(room.name, room);
+    }
+  }
+  return Array.from(merged.values());
 }

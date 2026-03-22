@@ -234,6 +234,19 @@ export function createCommandRegistry(): CommandSpec[] {
       }
     },
     {
+      id: "rooms.join",
+      path: "/rooms/join",
+      title: "Join Room",
+      order: 30,
+      run: async (app, command) => {
+        const room = command.named.room || command.positional[0] || "";
+        if (!room.trim()) {
+          throw new Error("Usage: /rooms/join testroom");
+        }
+        await app.openRoom(room.trim());
+      }
+    },
+    {
       id: "rooms.post",
       path: "/rooms/post",
       title: "Post Room Message",
@@ -242,6 +255,19 @@ export function createCommandRegistry(): CommandSpec[] {
         const text = command.named.text || command.positional.join(" ");
         if (!text.trim()) {
           throw new Error("Usage: /rooms/post text=\"hello\"");
+        }
+        await app.postRoomMessage(text.trim());
+      }
+    },
+    {
+      id: "rooms.send",
+      path: "/rooms/send",
+      title: "Send Room Message",
+      order: 31,
+      run: async (app, command) => {
+        const text = command.named.text || command.positional.join(" ");
+        if (!text.trim()) {
+          throw new Error("Usage: /rooms/send text=\"hello\"");
         }
         await app.postRoomMessage(text.trim());
       }
@@ -321,6 +347,24 @@ export function createCommandRegistry(): CommandSpec[] {
       run: async (app, command) => {
         const format = command.named.format || command.positional[0] || "png";
         await app.saveCurrentArt(format);
+      }
+    },
+    {
+      id: "art.open",
+      path: "/art/open",
+      title: "Open Saved Art",
+      order: 64,
+      run: async (app) => {
+        await app.openSavedArt();
+      }
+    },
+    {
+      id: "art.open.folder",
+      path: "/art/open-folder",
+      title: "Open Saved Art Folder",
+      order: 65,
+      run: async (app) => {
+        await app.openSavedArtFolder();
       }
     },
     {

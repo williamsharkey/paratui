@@ -5,6 +5,9 @@
 - This repository root is `/Users/william/Desktop/paratui`.
 - Keep all first-party project files here.
 - Do not create an extra inner `paratui/` folder.
+- Website source for `parasharkgod.com` lives here under `website/parasharkgod/`.
+- The private deploy mirror repo is `williamsharkey/parasharkgod`.
+- Keep the website files in sync between this repo and the private deploy repo.
 
 ## Reference code
 
@@ -66,3 +69,4 @@
 - Keep docs and code aligned when major decisions change.
 - Favor small reversible steps.
 - When proposing upstream `parascene` changes, ask for the smallest surface that unlocks `paratui`.
+- Treat `website/parasharkgod/` in this repo as the editable source copy, then mirror it into the private deploy repo before publishing site changes.

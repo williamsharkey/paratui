@@ -26,17 +26,28 @@ export function getFocusActions(state: AppState, focus: FocusRegion = state.focu
   switch (state.view) {
     case "profile":
       return [
+        ...(state.profile?.profile.user_name && state.profile.profile.user_name !== state.authUser?.handle
+          ? [{ id: "open_dm", label: "Open DM" }]
+          : []),
         { id: "open_creations", label: "Open Creations" },
         { id: "open_feed", label: "Open Feed" },
         { id: "open_settings", label: "Open Settings" }
       ];
     case "creation":
-      return [
-        { id: "toggle_preview", label: state.previewOpen ? "Hide Preview" : "Show Preview" },
-        { id: "previous_art", label: "Previous Art" },
-        { id: "next_art", label: "Next Art" },
-        { id: "save_art", label: "Save PNG" }
-      ];
+      return state.exports.lastSavedPath
+        ? [
+            { id: "toggle_preview", label: state.previewOpen ? "Hide Preview" : "Show Preview" },
+            { id: "toggle_full_view", label: "Full" },
+            { id: "comment_compose", label: "[+ comment]" },
+            { id: "open_saved_art", label: "Open" },
+            { id: "open_saved_folder", label: "Open Folder" }
+          ]
+        : [
+            { id: "toggle_preview", label: state.previewOpen ? "Hide Preview" : "Show Preview" },
+            { id: "toggle_full_view", label: "Full" },
+            { id: "comment_compose", label: "[+ comment]" },
+            { id: "save_art", label: "Save PNG" }
+          ];
     case "feed":
       return [
         { id: "previous_feed", label: "Previous Feed" },
@@ -45,12 +56,14 @@ export function getFocusActions(state: AppState, focus: FocusRegion = state.focu
       ];
     case "dm":
       return [
+        { id: "dm_compose", label: "type here to dm" },
         { id: "open_active_profile", label: "Open Profile" },
         { id: "open_feed", label: "Open Feed" },
         { id: "open_settings", label: "Open Settings" }
       ];
     case "room":
       return [
+        { id: "chat_compose", label: "type here to chat" },
         { id: "open_feed", label: "Open Feed" },
         { id: "open_settings", label: "Open Settings" }
       ];

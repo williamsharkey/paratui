@@ -4,8 +4,7 @@
 !assert view=feed
 !assert feed.count=5
 !assert feed.title=ghost alley
-!screen-contains feed latest
-!screen-contains ghost alley by @noirguy
+!screen-contains feed @noirguy - ghost alley
 !press right
 !assert feed.title=late train
 !press left

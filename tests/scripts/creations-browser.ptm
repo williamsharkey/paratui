@@ -16,8 +16,8 @@
 /art/slot/assign slot=C
 !assert slots.C.assigned=true
 !assert slots.C.title=glass tunnel
-!screen-contains C|
-!press space
+!screen-contains C│
+/art/preview/toggle
 !assert previewOpen=true
-!press space
+/art/preview/toggle
 !assert previewOpen=false

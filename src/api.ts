@@ -104,12 +104,41 @@ interface ChatThreadResponse {
   thread: ChatThread;
 }
 
+interface ChatThreadListMessage {
+  body?: string | null;
+  created_at?: string | null;
+  sender_id?: number | null;
+}
+
+interface ChatThreadListOtherUser {
+  id?: number;
+  display_name?: string | null;
+  user_name?: string | null;
+  avatar_url?: string | null;
+}
+
+interface ChatThreadListItem extends ChatThread {
+  title?: string | null;
+  other_user_id?: number | null;
+  other_user?: ChatThreadListOtherUser | null;
+  last_message?: ChatThreadListMessage | null;
+}
+
+interface ChatThreadsResponse {
+  viewer_id: number;
+  threads: ChatThreadListItem[];
+}
+
 interface ChatMessageRow {
   id: number;
   thread_id: number;
   sender_id: number;
   body: string;
   created_at: string;
+  sender_user_name?: string | null;
+  sender_avatar_url?: string | null;
+  reactions?: Record<string, number> | null;
+  viewer_reactions?: string[] | null;
 }
 
 interface ChatMessagesResponse {
@@ -233,6 +262,21 @@ export class ParasceneClient {
   }
 
   async listRooms(): Promise<RoomSummary[]> {
+    const threads = await this.#listThreads();
+    if (threads) {
+      return threads
+        .filter((thread) => thread.type === "channel" && thread.channel_slug)
+        .map((thread) => ({
+          name: String(thread.channel_slug || "").toLowerCase(),
+          title: thread.title || `#${String(thread.channel_slug || "").toLowerCase()}`,
+          messageCount: 0,
+          lastMessageText: thread.last_message?.body || null
+        }));
+    }
+
+    if (this.#usesOfficialHostedApi()) {
+      return [];
+    }
     try {
       const data = await this.#requestJson<RoomsResponse>("api/cli/social/rooms");
       return data.rooms;
@@ -257,6 +301,22 @@ export class ParasceneClient {
   }
 
   async listDms(): Promise<DmSummary[]> {
+    const threads = await this.#listThreads();
+    if (threads) {
+      return threads
+        .filter((thread) => thread.type === "dm" && thread.other_user?.user_name)
+        .map((thread) => {
+          const handle = String(thread.other_user?.user_name || "").replace(/^@/, "");
+          const displayName = String(thread.other_user?.display_name || handle);
+          return {
+            handle,
+            displayName,
+            online: false,
+            lastMessageText: thread.last_message?.body || null
+          };
+        });
+    }
+
     try {
       const data = await this.#requestJson<DmsResponse>("api/cli/social/dms");
       return data.dms;
@@ -266,9 +326,13 @@ export class ParasceneClient {
   }
 
   async loadDmMessages(handle: string): Promise<DmMessagesResponse> {
-    const target = await this.#loadCachedUserByHandle(handle);
-    const thread = await this.#openDmThread(target.id);
-    return this.#buildDmMessagesResponse(thread.id, target);
+    const normalized = handle.replace(/^@/, "").trim().toLowerCase();
+    const thread = await this.#openDmThread(normalized);
+    return this.#buildDmMessagesResponse(thread.id, {
+      id: 0,
+      handle: normalized,
+      displayName: normalized
+    });
   }
 
   async sendDm(threadId: number, handle: string, text: string): Promise<DmMessagesResponse> {
@@ -364,10 +428,13 @@ export class ParasceneClient {
     };
   }
 
-  async #openDmThread(otherUserId: number): Promise<ChatThread> {
+  async #openDmThread(otherUser: number | string): Promise<ChatThread> {
+    const body = typeof otherUser === "number"
+      ? { other_user_id: otherUser }
+      : { other_user_name: String(otherUser || "").replace(/^@/, "").trim().toLowerCase() };
     const data = await this.#requestJson<ChatThreadResponse>("api/chat/dm", {
       method: "POST",
-      body: JSON.stringify({ other_user_id: otherUserId })
+      body: JSON.stringify(body)
     });
     return data.thread;
   }
@@ -390,15 +457,29 @@ export class ParasceneClient {
 
   async #loadThreadMessages(threadId: number): Promise<SocialMessage[]> {
     const data = await this.#requestJson<ChatMessagesResponse>(`api/chat/threads/${threadId}/messages?limit=50`);
-    const senderIds = Array.from(new Set(data.messages.map((message) => Number(message.sender_id)).filter(Number.isFinite)));
+    const senderIds = Array.from(new Set(
+      data.messages
+        .filter((message) => !message.sender_user_name)
+        .map((message) => Number(message.sender_id))
+        .filter(Number.isFinite)
+    ));
     await Promise.all(senderIds.map((senderId) => this.#loadCachedUserById(senderId)));
 
     return data.messages.map((message) => {
-      const sender = this.#profileCacheById.get(Number(message.sender_id));
+      const senderId = Number(message.sender_id);
+      const directHandle = String(message.sender_user_name || "").replace(/^@/, "").trim();
+      if (directHandle) {
+        this.#profileCacheById.set(senderId, {
+          id: senderId,
+          handle: directHandle,
+          displayName: directHandle
+        });
+      }
+      const sender = this.#profileCacheById.get(senderId);
       return {
         id: Number(message.id),
-        authorHandle: sender?.handle || `user${message.sender_id}`,
-        authorDisplayName: sender?.displayName || sender?.handle || `user${message.sender_id}`,
+        authorHandle: sender?.handle || directHandle || `user${message.sender_id}`,
+        authorDisplayName: sender?.displayName || sender?.handle || directHandle || `user${message.sender_id}`,
         text: String(message.body || ""),
         createdAt: message.created_at
       };
@@ -433,6 +514,15 @@ export class ParasceneClient {
     return resolved;
   }
 
+  async #listThreads(): Promise<ChatThreadListItem[] | null> {
+    try {
+      const data = await this.#requestJson<ChatThreadsResponse>("api/chat/threads");
+      return data.threads;
+    } catch {
+      return null;
+    }
+  }
+
   async #requestJson<T>(pathname: string, init: RequestInit = {}, auth = true): Promise<T> {
     const url = new URL(pathname.replace(/^\//, ""), this.#baseUrl);
     const response = await fetch(url, {
@@ -455,6 +545,15 @@ export class ParasceneClient {
   #authHeaders(): Record<string, string> {
     const token = this.#getToken();
     return token ? { authorization: `Bearer ${token}` } : {};
+  }
+
+  #usesOfficialHostedApi(): boolean {
+    try {
+      const url = new URL(this.#baseUrl);
+      return url.hostname === "api.parascene.com" || url.hostname === "www.parascene.com" || url.hostname === "parascene.com";
+    } catch {
+      return false;
+    }
   }
 }
 

@@ -319,6 +319,46 @@ function chatThreadSummary(thread: SocialChatThread) {
   };
 }
 
+async function chatThreadListEntry(thread: SocialChatThread, viewerId: number) {
+  const messages = messagesForThread(thread);
+  const last = messages[messages.length - 1] || null;
+
+  if (thread.type === "channel") {
+    return {
+      ...chatThreadSummary(thread),
+      title: `#${thread.channelSlug || "room"}`,
+      last_message: last
+        ? {
+            body: last.text,
+            created_at: last.createdAt,
+            sender_id: last.authorId
+          }
+        : null
+    };
+  }
+
+  const otherUserId = thread.memberUserIds.find((userId) => userId !== viewerId) || viewerId;
+  const otherUser = await loadCliUser(otherUserId);
+  return {
+    ...chatThreadSummary(thread),
+    other_user_id: otherUser.id,
+    title: `@${otherUser.handle}`,
+    other_user: {
+      id: otherUser.id,
+      display_name: otherUser.displayName,
+      user_name: otherUser.handle,
+      avatar_url: null
+    },
+    last_message: last
+      ? {
+          body: last.text,
+          created_at: last.createdAt,
+          sender_id: last.authorId
+        }
+      : null
+  };
+}
+
 function ensureThreadMembers(thread: SocialChatThread, ...userIds: number[]): void {
   for (const userId of userIds) {
     if (!thread.memberUserIds.includes(userId)) {
@@ -429,7 +469,11 @@ function serializeChatMessage(threadId: number, message: SocialMessage) {
     thread_id: threadId,
     sender_id: message.authorId,
     body: message.text,
-    created_at: message.createdAt
+    created_at: message.createdAt,
+    sender_user_name: message.authorHandle,
+    sender_avatar_url: null,
+    reactions: {},
+    viewer_reactions: []
   };
 }
 
@@ -652,10 +696,19 @@ app.post("/api/chat/dm", async (req, res) => {
   if (!viewerId) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-  const rawTarget = req.body?.other_user_id ?? req.body?.otherUserId;
-  const targetUserId = Number(rawTarget);
+  const rawTargetId = req.body?.other_user_id ?? req.body?.otherUserId;
+  const rawTargetName = req.body?.other_user_name ?? req.body?.otherUsername ?? req.body?.username;
+  let targetUserId = Number(rawTargetId);
   if (!Number.isFinite(targetUserId) || targetUserId <= 0) {
-    return res.status(400).json({ error: "Bad request", message: "other_user_id required" });
+    const normalized = normalizeUsername(String(rawTargetName || ""));
+    if (!normalized) {
+      return res.status(400).json({ error: "Bad request", message: "other user required" });
+    }
+    const target = await findCliUserByHandle(normalized);
+    if (!target) {
+      return res.status(404).json({ error: "Not found", message: "user not found" });
+    }
+    targetUserId = target.id;
   }
   if (targetUserId === viewerId) {
     return res.status(400).json({ error: "Bad request", message: "cannot DM yourself" });
@@ -688,6 +741,29 @@ app.post("/api/chat/channels", async (req, res) => {
   const thread = ensureRoomThread(normalized, [viewerId]);
   return res.json({
     thread: chatThreadSummary(thread)
+  });
+});
+
+app.get("/api/chat/threads", async (req, res) => {
+  const viewerId = await authenticateBearer(req);
+  if (!viewerId) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  await seedSocialState();
+  const visibleThreads = Array.from(socialState.threadsById.values())
+    .filter((thread) => thread.memberUserIds.includes(viewerId));
+
+  const entries = await Promise.all(visibleThreads.map((thread) => chatThreadListEntry(thread, viewerId)));
+  entries.sort((left, right) => {
+    const leftStamp = left.last_message?.created_at || left.created_at || "";
+    const rightStamp = right.last_message?.created_at || right.created_at || "";
+    return rightStamp.localeCompare(leftStamp);
+  });
+
+  return res.json({
+    viewer_id: viewerId,
+    threads: entries
   });
 });
 

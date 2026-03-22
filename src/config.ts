@@ -19,6 +19,10 @@ function resolveDefaultConfigDir(): string {
   return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "paratui");
 }
 
+export function getConfigDir(): string {
+  return resolveDefaultConfigDir();
+}
+
 export function getConfigPath(): string {
   return path.join(resolveDefaultConfigDir(), "config.json");
 }
@@ -33,6 +37,9 @@ export function defaultConfig(): AppConfig {
     },
     audio: {
       muted: false
+    },
+    social: {
+      recentRooms: []
     },
     exports: {
       directory: path.join(os.homedir(), "Downloads")
@@ -61,6 +68,10 @@ export async function loadConfig(): Promise<AppConfig> {
       audio: {
         ...base.audio,
         ...(parsed.audio || {})
+      },
+      social: {
+        ...base.social,
+        ...(parsed.social || {})
       },
       exports: {
         ...base.exports,

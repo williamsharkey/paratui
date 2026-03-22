@@ -39,6 +39,8 @@ npx paratui
 - Repo root: `./`
 - Reference clone: `../parascene-reference`
 - The reference clone is a sibling checkout, not part of this repo, so it stays out of commits by default.
+- Website source for `parasharkgod.com` lives in `./website/parasharkgod/`.
+- The private deployment mirror repo is `../parasharkgod`.
 
 ## Product direction
 

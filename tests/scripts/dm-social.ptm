@@ -1,12 +1,18 @@
-# Open a DM thread and send a message.
+# Open a DM thread and send a message through the visible UI.
 /auth/key/set psn_test_sharkgod
-/people/dm @crosshj
+!press tab
+!assert focus=center
+!assert actions.selectedId=open_dm
+!press enter
 !assert view=dm
 !assert dm.handle=crosshj
 !assert dm.messageCount=2
 !screen-contains dm @crosshj
 !screen-contains latest tunnel pass
-/dm/send text="macro dm ping"
+!assert actions.selectedId=dm_compose
+!type macro dm ping
+!assert composer.active=true
+!press enter
 !assert dm.messageCount=3
 !assert status=dm sent @crosshj
 !screen-contains macro dm ping

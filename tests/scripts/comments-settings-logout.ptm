@@ -3,7 +3,14 @@
 !press right
 !assert view=creation
 !assert activity.count=2
-/comment/add text="ptm comment"
+!press down
+!press down
+!press down
+!press down
+!assert actions.selectedId=comment_compose
+!type ptm comment
+!assert composer.active=true
+!press enter
 !assert activity.count=3
 !assert status=comment posted
 /comment/react emoji=thumbsUp index=0
