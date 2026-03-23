@@ -333,14 +333,14 @@ Detailed interaction and macro spec:
 +------------------------------------------------------------------+
 | paratui           room:noir   you:@sharkgod online               |
 +-------------------------+----------------------------+-----------+
-| people / rooms / dm     | thread / room / creation               a|
-|                         |                                         b|
-| > @crosshj   online     | ascii image preview                    C|
-|   @noirguy   offline    |                                         d|
-|   room: noir            | messages / comments / reactions        E|
-|   dm: crosshj           |                                         |
+| people / rooms / dm     | thread / room / creation              a|
+|                         |                                       b|
+| > @crosshj   online     | ascii image preview                   C|
+|   @noirguy   offline    |                                       d|
+|   room: noir            | messages / comments / reactions       E|
+|   dm: crosshj           |                                        |
 +-------------------------+----------------------------+-----------+
-| command / compose:                                              |
+| command / compose:                                               |
 +------------------------------------------------------------------+
 ```
 
