@@ -20,6 +20,35 @@ export interface AppConfig {
   social: {
     recentRooms: string[];
   };
+  uiCache: {
+    loaded: {
+      people: boolean;
+      social: boolean;
+      notifications: boolean;
+      feed: boolean;
+      thread: boolean;
+      profile: boolean;
+    };
+    selectedLeftKey: string | null;
+    people: CliUserSummary[];
+    rooms: RoomSummary[];
+    dms: DmSummary[];
+    notifications: {
+      items: NotificationSummary[];
+      unreadCount: number;
+    };
+    feed: {
+      items: FeedItem[];
+      currentIndex: number;
+    };
+    currentThread: {
+      view: "dm" | "room" | null;
+      dmHandle: string | null;
+      roomName: string | null;
+      threadId: number | null;
+      messages: SocialMessage[];
+    };
+  };
   exports: {
     directory: string;
   };
@@ -120,6 +149,7 @@ export interface RoomSummary {
 }
 
 export interface DmSummary {
+  threadId?: number | null;
   handle: string;
   displayName: string;
   online: boolean;
@@ -213,6 +243,7 @@ export interface AppState {
     threadId: number | null;
     dmHandle: string | null;
     roomName: string | null;
+    threadPageIndex: number;
     threadMessages: SocialMessage[];
     rooms: RoomSummary[];
     dms: DmSummary[];
@@ -226,6 +257,14 @@ export interface AppState {
     items: NotificationSummary[];
     unreadCount: number;
     selectedIndex: number;
+  };
+  loaded: {
+    people: boolean;
+    social: boolean;
+    notifications: boolean;
+    feed: boolean;
+    thread: boolean;
+    profile: boolean;
   };
   realtime: {
     connected: boolean;

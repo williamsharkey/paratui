@@ -204,6 +204,40 @@ function socialLine(authorHandle: string, text: string): string {
   return `@${authorHandle}: ${text}`;
 }
 
+function historyPagerLine(pageIndex: number, pageCount: number): string {
+  const parts = [`history[${pageIndex + 1}/${pageCount}]`];
+  if (pageIndex > 0) {
+    parts.push("left newer");
+  }
+  if (pageIndex < pageCount - 1) {
+    parts.push("right older");
+  }
+  return parts.join("  ");
+}
+
+function paginateNewestFirstRows(
+  rows: RenderRow[],
+  width: number,
+  height: number,
+  pageIndex: number
+): RenderRow[] {
+  if (height <= 0) {
+    return [];
+  }
+  const wrappedRows = wrapRows(expandRows(rows), width);
+  if (wrappedRows.length <= height) {
+    return wrappedRows;
+  }
+  const pageSize = Math.max(1, height - 1);
+  const pageCount = Math.max(1, Math.ceil(wrappedRows.length / pageSize));
+  const clampedPageIndex = clampIndex(pageIndex, pageCount);
+  const start = clampedPageIndex * pageSize;
+  return [
+    ...wrappedRows.slice(start, start + pageSize),
+    { text: historyPagerLine(clampedPageIndex, pageCount) }
+  ];
+}
+
 function buildPositionBar(index: number, count: number, width: number): string {
   const barWidth = Math.max(3, width);
   const chars: string[] = Array.from({ length: barWidth }, () => FRAME.horizontal);
@@ -220,10 +254,6 @@ function buildPositionBar(index: number, count: number, width: number): string {
 }
 
 function buildHeaderContext(state: AppState): string | null {
-  if (!state.authUser) {
-    return null;
-  }
-
   if (state.view === "creation") {
     const current = state.creations.items[state.creations.currentIndex];
     if (!current) {
@@ -314,19 +344,27 @@ function buildSidebarRows(state: AppState): RenderRow[] {
 
     let text = "";
     if (entry.kind === "feed") {
-      text = "Feed";
+      text = state.loaded.feed ? "Feed" : "Feed..";
     } else if (entry.kind === "notifications") {
-      text = entry.unreadCount ? `Notifications (${entry.unreadCount})` : "Notifications";
+      text = state.loaded.notifications
+        ? (entry.unreadCount ? `Notifications (${entry.unreadCount})` : "Notifications")
+        : "Notifications..";
     } else if (entry.kind === "settings") {
       text = "Settings";
+    } else if (entry.kind === "exit") {
+      text = "Exit";
     } else if (entry.kind === "person" && entry.handle) {
       text = `@${entry.handle}${entry.online ? " [on]" : ""}`;
     } else if (entry.kind === "people_page") {
-      text = `people[${(entry.pageIndex || 0) + 1}/${entry.pageCount || 1}]`;
+      text = entry.pageCount
+        ? `people[${(entry.pageIndex || 0) + 1}/${entry.pageCount}]`
+        : "people[0/0]";
     } else if (entry.kind === "room" && entry.roomName) {
       text = entry.roomName;
     } else if (entry.kind === "new-room") {
       text = "+ room";
+    } else if (entry.kind === "placeholder") {
+      text = entry.label || "";
     }
 
     rows.push({
@@ -338,7 +376,7 @@ function buildSidebarRows(state: AppState): RenderRow[] {
   return rows;
 }
 
-function buildCenterContentRows(state: AppState): RenderRow[] {
+function buildCenterContentRows(state: AppState, width: number, height: number): RenderRow[] {
   if (!state.authUser) {
     const draft = state.authInput.active
       ? `key: ${maskApiKey(state.authInput.draft)}${state.authInput.draft ? "" : "█"}`
@@ -366,20 +404,17 @@ function buildCenterContentRows(state: AppState): RenderRow[] {
 
   if (state.view === "settings") {
     return [
-      { text: "settings" },
-      { text: "" },
       { text: "space or enter toggles" },
       { text: "esc returns" }
     ];
   }
 
   if (state.view === "notifications") {
+    if (!state.loaded.notifications) {
+      return [];
+    }
     if (!state.notifications.items.length) {
-      return [
-        { text: "notifications" },
-        { text: "" },
-        { text: "no notifications" }
-      ];
+      return [];
     }
 
     const visibleCount = 10;
@@ -402,9 +437,7 @@ function buildCenterContentRows(state: AppState): RenderRow[] {
 
   if (state.view === "profile" && state.profile) {
     const profile = state.profile;
-    const handle = profile.profile.user_name || "unknown";
     return [
-      { text: `profile @${handle}` },
       { text: profile.profile.display_name || "" },
       { text: "" },
       { text: `creations: ${profile.stats.creations_published}` },
@@ -418,29 +451,49 @@ function buildCenterContentRows(state: AppState): RenderRow[] {
   }
 
   if (state.view === "dm") {
+    if (!state.loaded.thread) {
+      return [];
+    }
     const messageRows = state.social.threadMessages.length
-      ? state.social.threadMessages.slice(-10).map((message) => ({ text: socialLine(message.authorHandle, message.text) }))
+      ? [...state.social.threadMessages]
+        .reverse()
+        .map((message) => ({ text: socialLine(message.authorHandle, message.text) }))
       : [{ text: "(no messages yet)" }];
-    return [
-      ...messageRows
-    ];
+    return paginateNewestFirstRows(messageRows, width, height, state.social.threadPageIndex);
   }
 
   if (state.view === "room") {
-    const messageRows = state.social.threadMessages.length
-      ? state.social.threadMessages.slice(-10).map((message) => ({ text: socialLine(message.authorHandle, message.text) }))
-      : [{ text: "(no messages yet)" }];
-    return [
+    if (!state.loaded.thread) {
+      return [];
+    }
+    const prefixRows = wrapRows(expandRows([
       { text: roomParticipantLine(state) },
-      { text: "" },
-      ...messageRows
+      { text: "" }
+    ]), width);
+    const messageRows = state.social.threadMessages.length
+      ? [...state.social.threadMessages]
+        .reverse()
+        .map((message) => ({ text: socialLine(message.authorHandle, message.text) }))
+      : [{ text: "(no messages yet)" }];
+    const pagedMessages = paginateNewestFirstRows(
+      messageRows,
+      width,
+      Math.max(1, height - prefixRows.length),
+      state.social.threadPageIndex
+    );
+    return [
+      ...prefixRows,
+      ...pagedMessages
     ];
   }
 
   if (state.view === "feed") {
+    if (!state.loaded.feed) {
+      return [];
+    }
     const current = state.feed.items[state.feed.currentIndex];
     if (!current) {
-      return [{ text: "feed" }, { text: "" }, { text: "no feed items" }];
+      return [];
     }
     const asciiLines = state.feed.ascii ? state.feed.ascii.split("\n") : ["(loading ascii...)"];
     return [
@@ -479,7 +532,7 @@ function buildCenterContentRows(state: AppState): RenderRow[] {
   if (state.view === "creation") {
     const current = state.creations.items[state.creations.currentIndex];
     if (!current) {
-      return [{ text: "creation" }, { text: "" }, { text: "no creations" }];
+      return [];
     }
     const asciiLines = state.creations.ascii ? state.creations.ascii.split("\n") : ["(loading ascii...)"];
     const visibleComments = state.creations.activity
@@ -546,7 +599,6 @@ function buildActionFooterRows(state: AppState, focus: FocusRegion): RenderRow[]
 }
 
 function buildCenterRows(state: AppState, width: number, height: number): string[] {
-  const contentRows = buildCenterContentRows(state);
   const footerFocus: FocusRegion = !state.authUser || state.view === "login"
     ? "auth"
     : state.view === "settings"
@@ -554,6 +606,7 @@ function buildCenterRows(state: AppState, width: number, height: number): string
       : "center";
   const footerRows = buildActionFooterRows(state, footerFocus);
   const contentHeight = Math.max(0, height - footerRows.length);
+  const contentRows = buildCenterContentRows(state, width, contentHeight);
   return normalizeRows([
     ...contentRows.slice(0, contentHeight),
     ...footerRows
@@ -575,11 +628,14 @@ function buildSuggestionLine(state: AppState, _commands: CommandSpec[], width: n
   } else if (state.view === "notifications") {
     hint = "up/down selects notifications  enter marks read  tab switches focus";
   } else if (state.view === "room") {
-    hint = "type to chat  enter sends  tab switches focus";
+    hint = "type to chat  left/right pages history  enter sends  tab switches focus";
   } else if (state.view === "dm") {
-    hint = "type to dm  enter sends  tab switches focus";
+    hint = "type to dm  left/right pages history  enter sends  tab switches focus";
   } else if (state.focus === "left") {
     hint = "up/down changes view  type sends in the active view";
+    if (getLeftNavEntries(state)[state.people.selectedIndex]?.kind === "exit") {
+      hint = "enter exits paratui";
+    }
   }
   return pad(hint, width);
 }
@@ -625,15 +681,16 @@ export function renderApp(
   const columnDivider = layout.mode === "columns" ? [layout.leftWidth + 1] : [];
 
   lines.push(topBorder(layout.totalWidth));
-  const headerParts = [
-    `paratui  ${state.authUser ? `you:@${state.authUser.handle} online` : "guest"}${state.realtime.connected ? `  live:${state.realtime.room}` : ""}`
-  ];
   const headerContext = buildHeaderContext(state);
-  if (headerContext) {
-    headerParts.push(headerContext);
+  if (layout.mode === "columns") {
+    lines.push(
+      `${FRAME.vertical}${repeat(" ", layout.leftWidth)}${FRAME.vertical}${pad(`  ${headerContext || ""}`, layout.centerWidth + 1)}${FRAME.vertical}`
+    );
+    lines.push(middleBorder(layout.totalWidth, columnDivider));
+  } else {
+    lines.push(framedLine(` ${pad(`  ${headerContext || ""}`, layout.totalWidth - 4)} `));
+    lines.push(middleBorder(layout.totalWidth));
   }
-  lines.push(framedLine(` ${pad(headerParts.join(" - "), layout.totalWidth - 4)} `));
-  lines.push(middleBorder(layout.totalWidth, columnDivider));
 
   if (layout.mode === "columns") {
     const leftLines = normalizeRows(buildSidebarRows(state), layout.leftWidth, layout.bodyHeight);

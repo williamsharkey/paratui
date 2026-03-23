@@ -46,6 +46,35 @@ export function defaultConfig(): AppConfig {
     social: {
       recentRooms: []
     },
+    uiCache: {
+      loaded: {
+        people: false,
+        social: false,
+        notifications: false,
+        feed: false,
+        thread: false,
+        profile: false
+      },
+      selectedLeftKey: null,
+      people: [],
+      rooms: [],
+      dms: [],
+      notifications: {
+        items: [],
+        unreadCount: 0
+      },
+      feed: {
+        items: [],
+        currentIndex: 0
+      },
+      currentThread: {
+        view: null,
+        dmHandle: null,
+        roomName: null,
+        threadId: null,
+        messages: []
+      }
+    },
     exports: {
       directory: path.join(os.homedir(), "Downloads")
     },
@@ -81,6 +110,26 @@ export async function loadConfig(): Promise<AppConfig> {
       social: {
         ...base.social,
         ...(parsed.social || {})
+      },
+      uiCache: {
+        ...base.uiCache,
+        ...(parsed.uiCache || {}),
+        loaded: {
+          ...base.uiCache.loaded,
+          ...((parsed.uiCache || {}).loaded || {})
+        },
+        notifications: {
+          ...base.uiCache.notifications,
+          ...((parsed.uiCache || {}).notifications || {})
+        },
+        feed: {
+          ...base.uiCache.feed,
+          ...((parsed.uiCache || {}).feed || {})
+        },
+        currentThread: {
+          ...base.uiCache.currentThread,
+          ...((parsed.uiCache || {}).currentThread || {})
+        }
       },
       exports: {
         ...base.exports,

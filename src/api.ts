@@ -472,9 +472,17 @@ export class ParasceneClient {
     }
   }
 
-  async loadDmMessages(handle: string): Promise<DmMessagesResponse> {
+  async loadDmMessages(handle: string, knownThreadId?: number | null): Promise<DmMessagesResponse> {
     const normalized = handle.replace(/^@/, "").trim().toLowerCase();
-    const thread = await this.#openDmThread(normalized);
+    const explicitThreadId = Number(knownThreadId);
+    const thread = Number.isFinite(explicitThreadId) && explicitThreadId > 0
+      ? {
+          id: explicitThreadId,
+          type: "dm" as const,
+          dm_pair_key: null,
+          channel_slug: null
+        }
+      : await this.#openDmThread(normalized);
     return this.#buildDmMessagesResponse(thread.id, {
       id: 0,
       handle: normalized,
@@ -680,6 +688,7 @@ export class ParasceneClient {
             const handle = String(thread.other_user?.user_name || "").replace(/^@/, "");
             const displayName = String(thread.other_user?.display_name || handle);
             return {
+              threadId: Number(thread.id),
               handle,
               displayName,
               online: false,
@@ -730,6 +739,7 @@ export class ParasceneClient {
     return {
       threadId,
       dm: {
+        threadId,
         handle: target.handle,
         displayName: target.displayName,
         online: false,

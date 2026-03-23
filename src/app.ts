@@ -15,6 +15,7 @@ import {
 } from "./commands.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { exportImageWithMetadata, normalizeFormat } from "./export.js";
+import { sanitizeTextForTui } from "./emoji.js";
 import { getFocusActions } from "./focus-actions.js";
 import {
   findLeftNavIndex,
@@ -127,6 +128,7 @@ export class ParatuiApp {
       threadId: null,
       dmHandle: null,
       roomName: null,
+      threadPageIndex: 0,
       threadMessages: [],
       rooms: [],
       dms: []
@@ -140,6 +142,14 @@ export class ParatuiApp {
       items: [],
       unreadCount: 0,
       selectedIndex: 0
+    },
+    loaded: {
+      people: false,
+      social: false,
+      notifications: false,
+      feed: false,
+      thread: false,
+      profile: false
     },
     realtime: {
       connected: false,
@@ -279,6 +289,14 @@ export class ParatuiApp {
     },
     onThreadDirty: (threadId) => {
       this.queueParasceneThreadRefresh(threadId);
+    },
+    onStateChange: (connected) => {
+      if (!connected) {
+        this.showCachedModeStatus("reconnecting - cached mode");
+      }
+    },
+    onError: () => {
+      this.showCachedModeStatus("offline - cached mode");
     }
   });
   #interactiveResolver: (() => void) | null = null;
@@ -302,6 +320,7 @@ export class ParatuiApp {
   #personStatsPromises = new Map<string, Promise<number | null>>();
   #peopleRefreshTimer: NodeJS.Timeout | null = null;
   #leftPrefetchTimer: NodeJS.Timeout | null = null;
+  #persistUiCacheTimer: NodeJS.Timeout | null = null;
   #leftSelectionLoadVersion = 0;
   #terminalUiActive = false;
   #lastRenderedLines: string[] = [];
@@ -332,9 +351,6 @@ export class ParatuiApp {
       try {
         const me = await this.#client.me();
         this.state.authUser = me.user;
-        await this.refreshPeople().catch(() => undefined);
-        await this.loadSocialLists();
-        await this.refreshNotifications().catch(() => undefined);
       } catch {
         this.config.auth.bearerToken = null;
         this.config.auth.username = null;
@@ -350,8 +366,16 @@ export class ParatuiApp {
       : "set api key";
 
     if (this.state.authUser) {
-      this.selectLeftEntry("feed");
-      await this.openFeed().catch(() => undefined);
+      this.applyPersistedUiCache();
+      const selectedKey = this.config.uiCache.selectedLeftKey || "feed";
+      if (!this.selectLeftEntry(selectedKey)) {
+        this.selectLeftEntry("feed");
+      }
+      const selectedEntry = this.currentLeftSelection();
+      if (selectedEntry) {
+        this.primeLeftSelection(selectedEntry);
+        this.openLeftSelectionInBackground(selectedEntry, true);
+      }
       this.state.focus = "left";
       this.#lastNonSlashFocus = "left";
       this.ensureParasceneRealtime();
@@ -361,6 +385,10 @@ export class ParatuiApp {
     if (!this.options.headless) {
       this.render();
       this.bridge.emit({ type: "ready", snapshot: this.snapshot() });
+    }
+
+    if (this.state.authUser) {
+      this.kickAuthenticatedBackgroundHydration();
     }
   }
 
@@ -478,8 +506,142 @@ export class ParatuiApp {
     };
   }
 
+  private applyPersistedUiCache(): void {
+    const cache = this.config.uiCache;
+    const persistedThreadKey = cache.currentThread.view === "dm" && cache.currentThread.dmHandle
+      ? `person:${cache.currentThread.dmHandle}`
+      : cache.currentThread.view === "room" && cache.currentThread.roomName
+        ? `room:${cache.currentThread.roomName}`
+        : null;
+    const persistedThreadReady = Boolean(
+      cache.loaded.thread
+      && cache.currentThread.view
+      && persistedThreadKey
+      && cache.selectedLeftKey === persistedThreadKey
+      && cache.currentThread.messages.length
+    );
+    this.state.loaded = {
+      ...this.state.loaded,
+      ...cache.loaded,
+      thread: persistedThreadReady
+    };
+    this.state.social.rooms = mergeRoomSummaries(
+      cache.rooms,
+      this.config.social.recentRooms.map((roomName) => recentRoomSummary(roomName))
+    );
+    this.state.social.dms = [...cache.dms];
+    this.state.people.items = this.mergePeopleCandidates(cache.people);
+    this.state.notifications.items = [...cache.notifications.items];
+    this.state.notifications.unreadCount = cache.notifications.unreadCount;
+    this.state.feed.items = [...cache.feed.items];
+    this.state.feed.currentIndex = Math.max(0, Math.min(cache.feed.currentIndex, Math.max(0, cache.feed.items.length - 1)));
+    this.state.social.dmHandle = cache.currentThread.dmHandle;
+    this.state.social.roomName = cache.currentThread.roomName;
+    this.state.social.threadId = cache.currentThread.threadId;
+    this.state.social.threadPageIndex = 0;
+    this.state.social.threadMessages = [...cache.currentThread.messages];
+
+    if (cache.feed.items.length) {
+      this.#feedCache = {
+        value: [...cache.feed.items],
+        updatedAt: Date.now()
+      };
+    }
+
+    this.#notificationsCache = {
+      value: {
+        items: [...cache.notifications.items],
+        unreadCount: cache.notifications.unreadCount
+      },
+      updatedAt: Date.now()
+    };
+
+    this.#socialSummaryCache = {
+      value: {
+        rooms: [...cache.rooms],
+        dms: [...cache.dms]
+      },
+      updatedAt: Date.now()
+    };
+
+    if (cache.currentThread.view === "dm" && cache.currentThread.dmHandle) {
+      this.setCachedMapValue(this.#dmCache, cache.currentThread.dmHandle, {
+        threadId: cache.currentThread.threadId || 0,
+        dm: this.state.social.dms.find((entry) => entry.handle === cache.currentThread.dmHandle) || {
+          threadId: cache.currentThread.threadId,
+          handle: cache.currentThread.dmHandle,
+          displayName: cache.currentThread.dmHandle,
+          online: false,
+          lastMessageText: cache.currentThread.messages.at(-1)?.text || null,
+          lastMessageAt: cache.currentThread.messages.at(-1)?.createdAt || null
+        },
+        messages: [...cache.currentThread.messages]
+      });
+    }
+
+    if (cache.currentThread.view === "room" && cache.currentThread.roomName) {
+      this.setCachedMapValue(this.#roomCache, cache.currentThread.roomName, {
+        threadId: cache.currentThread.threadId || 0,
+        room: this.state.social.rooms.find((entry) => entry.name === cache.currentThread.roomName) || recentRoomSummary(cache.currentThread.roomName),
+        messages: [...cache.currentThread.messages]
+      });
+    }
+  }
+
+  private schedulePersistUiCache(): void {
+    if (!this.config) {
+      return;
+    }
+    if (this.#persistUiCacheTimer) {
+      clearTimeout(this.#persistUiCacheTimer);
+    }
+    this.#persistUiCacheTimer = setTimeout(() => {
+      this.#persistUiCacheTimer = null;
+      void this.persistUiCacheNow();
+    }, 150);
+  }
+
+  private async persistUiCacheNow(): Promise<void> {
+    if (!this.config) {
+      return;
+    }
+    this.config.uiCache = {
+      loaded: { ...this.state.loaded },
+      selectedLeftKey: this.currentLeftSelectionKey(),
+      people: this.state.people.items.slice(0, 32),
+      rooms: this.state.social.rooms.slice(0, 24),
+      dms: this.state.social.dms.slice(0, 24),
+      notifications: {
+        items: this.state.notifications.items.slice(0, 32),
+        unreadCount: this.state.notifications.unreadCount
+      },
+      feed: {
+        items: this.state.feed.items.slice(0, 32),
+        currentIndex: this.state.feed.currentIndex
+      },
+      currentThread: {
+        view: this.state.view === "dm" || this.state.view === "room" ? this.state.view : null,
+        dmHandle: this.state.social.dmHandle,
+        roomName: this.state.social.roomName,
+        threadId: this.state.social.threadId,
+        messages: this.state.social.threadMessages.slice(-20)
+      }
+    };
+    await saveConfig(this.config);
+  }
+
   bridgeLog(message: string): void {
     this.bridge.emit({ type: "log", message });
+  }
+
+  private formatUiError(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    if (error instanceof RangeError || /maximum call stack size exceeded/i.test(message)) {
+      this.#parasceneRealtimeRetryAt = Date.now() + 5 * 60_000;
+      void this.#parasceneRealtime.disconnect().catch(() => undefined);
+      return "realtime paused - cached mode";
+    }
+    return message;
   }
 
   assertSnapshot(pathName: string, expectedRaw: string): void {
@@ -603,7 +765,7 @@ export class ParatuiApp {
     return promise;
   }
 
-  private async loadDmCached(handle: string, force = false): Promise<CachedDmView> {
+  private async loadDmCached(handle: string, force = false, knownThreadId?: number | null): Promise<CachedDmView> {
     const normalized = handle.replace(/^@/, "").trim().toLowerCase();
     const cached = !force ? this.freshCachedValue(this.#dmCache.get(normalized), THREAD_CACHE_TTL_MS) : null;
     if (cached) {
@@ -613,7 +775,7 @@ export class ParatuiApp {
     if (inflight) {
       return inflight;
     }
-    const promise = this.#client.loadDmMessages(normalized)
+    const promise = this.#client.loadDmMessages(normalized, knownThreadId)
       .then((data) => this.setCachedMapValue(this.#dmCache, normalized, {
         threadId: data.threadId,
         dm: data.dm,
@@ -824,6 +986,7 @@ export class ParatuiApp {
     }
     this.state.status = this.leftSelectionStatus(nextEntry);
     this.openLeftSelectionInBackground(nextEntry);
+    this.schedulePersistUiCache();
     this.playUiSound("focus");
   }
 
@@ -841,6 +1004,7 @@ export class ParatuiApp {
     this.state.status = `people page ${nextPage + 1}/${pageCount}`;
     this.warmVisiblePeopleEntries();
     this.scheduleLeftPrefetch(this.state.people.selectedIndex);
+    this.schedulePersistUiCache();
     this.playUiSound("focus");
   }
 
@@ -881,6 +1045,94 @@ export class ParatuiApp {
       ? "notification"
       : "notification unread";
     this.playUiSound("focus");
+  }
+
+  private currentThreadWrapWidth(): number {
+    const layout = calculateLayout(this.#viewport);
+    return layout.mode === "columns" ? layout.centerWidth : layout.contentWidth;
+  }
+
+  private currentThreadContentHeight(): number {
+    const layout = calculateLayout(this.#viewport);
+    const centerHeight = layout.mode === "columns" ? layout.bodyHeight : layout.bottomSectionHeight;
+    const footerRows = 3;
+    const staticHeaderRows = this.state.view === "room"
+      ? this.wrapTextForPagination(
+          [
+            "users: "
+              + Array.from(new Set(
+                this.state.social.threadMessages
+                  .map((message) => message.authorHandle)
+                  .filter(Boolean)
+              ))
+                .map((handle) => `@${handle}`)
+                .join(" "),
+            ""
+          ].join("\n"),
+          this.currentThreadWrapWidth()
+        ).length
+      : 0;
+    return Math.max(1, centerHeight - footerRows - staticHeaderRows);
+  }
+
+  private wrapTextForPagination(text: string, width: number): string[] {
+    if (width <= 0) {
+      return [];
+    }
+    const normalized = sanitizeTextForTui(text).replace(/\r/g, "").replace(/\t/g, "  ");
+    const lines = normalized.split("\n");
+    const wrapped: string[] = [];
+    for (const line of lines) {
+      if (!line) {
+        wrapped.push("");
+        continue;
+      }
+      let remaining = line;
+      while (remaining.length > width) {
+        wrapped.push(remaining.slice(0, width));
+        remaining = remaining.slice(width);
+      }
+      wrapped.push(remaining);
+    }
+    return wrapped;
+  }
+
+  private threadPageMetrics(): { pageCount: number; pageIndex: number } {
+    if (this.state.view !== "dm" && this.state.view !== "room") {
+      return { pageCount: 1, pageIndex: 0 };
+    }
+    const width = this.currentThreadWrapWidth();
+    const availableRows = this.currentThreadContentHeight();
+    const wrappedRows = this.state.social.threadMessages.flatMap((message) =>
+      this.wrapTextForPagination(`@${message.authorHandle}: ${message.text}`, width)
+    );
+
+    if (!wrappedRows.length || wrappedRows.length <= availableRows) {
+      return { pageCount: 1, pageIndex: 0 };
+    }
+
+    const pageSize = Math.max(1, availableRows - 1);
+    const pageCount = Math.max(1, Math.ceil(wrappedRows.length / pageSize));
+    const pageIndex = Math.max(0, Math.min(this.state.social.threadPageIndex, pageCount - 1));
+    return { pageCount, pageIndex };
+  }
+
+  private pageThreadHistory(delta: number): boolean {
+    if ((this.state.view !== "dm" && this.state.view !== "room") || this.state.composer.active) {
+      return false;
+    }
+    const { pageCount, pageIndex } = this.threadPageMetrics();
+    if (pageCount <= 1) {
+      return false;
+    }
+    const nextPageIndex = Math.max(0, Math.min(pageIndex + delta, pageCount - 1));
+    if (nextPageIndex === pageIndex) {
+      return false;
+    }
+    this.state.social.threadPageIndex = nextPageIndex;
+    this.state.status = `history ${nextPageIndex + 1}/${pageCount}`;
+    this.playUiSound("focus");
+    return true;
   }
 
   private moveCreationSelection(delta: number): void {
@@ -996,6 +1248,13 @@ export class ParatuiApp {
     if (this.state.focus === "left") {
       const selection = this.currentLeftSelection();
       if (!selection) {
+        return;
+      }
+      if (selection.kind === "exit") {
+        this.shutdown();
+        return;
+      }
+      if (selection.kind === "placeholder" || selection.kind === "people_page") {
         return;
       }
       if (selection.kind === "new-room") {
@@ -1285,9 +1544,10 @@ export class ParatuiApp {
     this.ensureAuthenticated();
     const people = await this.#client.listUsers(this.state.authUser.handle);
     this.applyPeopleList(people);
-    this.state.status = `loaded ${this.state.people.items.length} people`;
+    this.state.loaded.people = true;
     this.prefetchVisiblePersonStats();
     this.warmVisiblePeopleEntries();
+    this.schedulePersistUiCache();
   }
 
   async refreshNotifications(): Promise<void> {
@@ -1296,6 +1556,7 @@ export class ParatuiApp {
     const { items, unreadCount } = await this.loadNotificationsCached(true);
     this.state.notifications.items = items;
     this.state.notifications.unreadCount = unreadCount;
+    this.state.loaded.notifications = true;
     this.#notificationsCache = {
       value: {
         items,
@@ -1309,6 +1570,7 @@ export class ParatuiApp {
     } else {
       this.state.notifications.selectedIndex = 0;
     }
+    this.schedulePersistUiCache();
   }
 
   async setApiKey(token: string): Promise<void> {
@@ -1329,17 +1591,17 @@ export class ParatuiApp {
     this.state.focus = "left";
     this.#lastNonSlashFocus = "left";
     this.state.actions.selectedIndex = 0;
-    await this.refreshPeople().catch(() => undefined);
-    await this.loadSocialLists();
-    this.warmVisiblePeopleEntries();
-    await this.refreshNotifications().catch(() => undefined);
     this.selectLeftEntry("feed");
-    await this.openFeed().catch(() => undefined);
+    this.openLeftSelectionInBackground(this.currentLeftSelection(), true);
     this.state.focus = "left";
     this.#lastNonSlashFocus = "left";
     this.state.status = `api key set for @${result.user.handle}`;
+    this.state.loaded.profile = false;
+    this.state.loaded.thread = false;
     this.ensureParasceneRealtime();
     this.syncParasceneRealtimeSubscriptions();
+    this.kickAuthenticatedBackgroundHydration();
+    this.schedulePersistUiCache();
     this.playUiSound("select");
   }
 
@@ -1366,6 +1628,12 @@ export class ParatuiApp {
     this.state.social.dms = [];
     this.state.feed.items = [];
     this.state.feed.ascii = "";
+    this.state.loaded.people = false;
+    this.state.loaded.social = false;
+    this.state.loaded.notifications = false;
+    this.state.loaded.feed = false;
+    this.state.loaded.thread = false;
+    this.state.loaded.profile = false;
     this.clearRealtimeState();
     this.#profileCache.clear();
     this.#profileLoadPromises.clear();
@@ -1388,6 +1656,7 @@ export class ParatuiApp {
     this.state.actions.selectedIndex = 0;
     this.state.status = "api key removed";
     this.#parasceneRealtimeRetryAt = 0;
+    this.schedulePersistUiCache();
     this.playUiSound("back");
   }
 
@@ -1396,11 +1665,13 @@ export class ParatuiApp {
     const normalized = handle.replace(/^@/, "").trim().toLowerCase();
     this.selectHandle(normalized);
     this.state.profile = await this.loadProfileCached(normalized);
+    this.state.loaded.profile = true;
     this.state.view = "profile";
     this.state.focus = "left";
     this.#lastNonSlashFocus = "left";
     this.state.actions.selectedIndex = 0;
     this.state.status = `profile @${normalized}`;
+    this.schedulePersistUiCache();
     this.syncParasceneRealtimeSubscriptions();
   }
 
@@ -1496,6 +1767,7 @@ export class ParatuiApp {
     this.#lastNonSlashFocus = "settings";
     this.state.actions.selectedIndex = 0;
     this.state.status = "settings";
+    this.schedulePersistUiCache();
     this.syncParasceneRealtimeSubscriptions();
   }
 
@@ -1542,20 +1814,23 @@ export class ParatuiApp {
     const normalized = handle.replace(/^@/, "");
     this.selectHandle(normalized);
     const remembered = this.state.social.dms.find((entry) => entry.handle === normalized) || null;
-    const data = await this.loadDmCached(normalized, true);
+    const data = await this.loadDmCached(normalized, true, remembered?.threadId);
     const nextDm = remembered && data.dm.displayName === data.dm.handle
-      ? { ...data.dm, displayName: remembered.displayName, online: remembered.online }
+      ? { ...data.dm, threadId: data.threadId, displayName: remembered.displayName, online: remembered.online }
       : data.dm;
     this.state.social.dmHandle = nextDm.handle;
     this.state.social.roomName = null;
     this.state.social.threadId = data.threadId;
+    this.state.social.threadPageIndex = 0;
     this.state.social.threadMessages = data.messages;
+    this.state.loaded.thread = true;
     this.rememberDm(nextDm);
     this.state.view = "dm";
     this.state.focus = "center";
     this.#lastNonSlashFocus = "center";
     this.state.actions.selectedIndex = 0;
     this.state.status = `dm @${nextDm.handle}`;
+    this.schedulePersistUiCache();
     this.syncParasceneRealtimeSubscriptions();
   }
 
@@ -1566,13 +1841,16 @@ export class ParatuiApp {
     }
     let threadId = this.state.social.threadId;
     if (!threadId) {
-      const opened = await this.loadDmCached(this.state.social.dmHandle, true);
+      const remembered = this.state.social.dms.find((entry) => entry.handle === this.state.social.dmHandle) || null;
+      const opened = await this.loadDmCached(this.state.social.dmHandle, true, remembered?.threadId);
       threadId = opened.threadId;
       this.state.social.threadId = threadId;
     }
     const data = await this.#client.sendDm(threadId, this.state.social.dmHandle, text);
     this.state.social.threadMessages = data.messages;
     this.state.social.threadId = data.threadId;
+    this.state.social.threadPageIndex = 0;
+    this.state.loaded.thread = true;
     this.rememberDm(data.dm);
     this.setCachedMapValue(this.#dmCache, data.dm.handle, {
       threadId: data.threadId,
@@ -1580,6 +1858,7 @@ export class ParatuiApp {
       messages: data.messages
     });
     this.state.status = `dm sent @${data.dm.handle}`;
+    this.schedulePersistUiCache();
     this.playUiSound("select");
   }
 
@@ -1590,7 +1869,9 @@ export class ParatuiApp {
     this.state.social.roomName = data.room.name;
     this.state.social.dmHandle = null;
     this.state.social.threadId = data.threadId;
+    this.state.social.threadPageIndex = 0;
     this.state.social.threadMessages = data.messages;
+    this.state.loaded.thread = true;
     this.rememberRoom(data.room);
     this.selectRoom(data.room.name);
     this.state.view = "room";
@@ -1598,6 +1879,7 @@ export class ParatuiApp {
     this.#lastNonSlashFocus = "center";
     this.state.actions.selectedIndex = 0;
     this.state.status = `room ${data.room.name}`;
+    this.schedulePersistUiCache();
     this.syncParasceneRealtimeSubscriptions();
   }
 
@@ -1615,6 +1897,8 @@ export class ParatuiApp {
     const data = await this.#client.postRoomMessage(threadId, this.state.social.roomName, text);
     this.state.social.threadMessages = data.messages;
     this.state.social.threadId = data.threadId;
+    this.state.social.threadPageIndex = 0;
+    this.state.loaded.thread = true;
     this.rememberRoom(data.room);
     this.setCachedMapValue(this.#roomCache, data.room.name, {
       threadId: data.threadId,
@@ -1622,6 +1906,7 @@ export class ParatuiApp {
       messages: data.messages
     });
     this.state.status = `room post ${data.room.name}`;
+    this.schedulePersistUiCache();
     this.playUiSound("select");
   }
 
@@ -1631,12 +1916,14 @@ export class ParatuiApp {
     this.state.exports.lastSavedPath = null;
     this.state.feed.items = await this.loadFeedCached(true);
     this.state.feed.currentIndex = 0;
+    this.state.loaded.feed = true;
     this.state.view = "feed";
     this.state.focus = "center";
     this.#lastNonSlashFocus = "center";
     this.state.actions.selectedIndex = 0;
     await this.loadCurrentFeedDetail();
     this.state.status = `feed ${this.state.feed.items.length}`;
+    this.schedulePersistUiCache();
     this.syncParasceneRealtimeSubscriptions();
   }
 
@@ -1647,6 +1934,7 @@ export class ParatuiApp {
     this.state.notifications.items = data.items;
     this.state.notifications.unreadCount = data.unreadCount;
     this.state.notifications.selectedIndex = 0;
+    this.state.loaded.notifications = true;
     this.state.view = "notifications";
     this.state.focus = "center";
     this.#lastNonSlashFocus = "center";
@@ -1654,6 +1942,7 @@ export class ParatuiApp {
     this.state.status = this.state.notifications.unreadCount
       ? `notifications ${this.state.notifications.unreadCount} unread`
       : "notifications";
+    this.schedulePersistUiCache();
     this.syncParasceneRealtimeSubscriptions();
   }
 
@@ -2299,12 +2588,18 @@ export class ParatuiApp {
           this.changePeoplePage(-1);
         } else if (key.name === "right" && this.state.focus === "left" && this.currentLeftSelection()?.kind === "people_page") {
           this.changePeoplePage(1);
+        } else if (key.name === "left" && this.pageThreadHistory(-1)) {
+          this.render();
+          this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
+          return;
+        } else if (key.name === "right" && this.pageThreadHistory(1)) {
+          this.render();
+          this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
+          return;
         } else if (key.name === "up" && this.state.focus !== "left") {
           this.moveFocusAction(-1);
         } else if (key.name === "down" && this.state.focus !== "left") {
           this.moveFocusAction(1);
-        } else if (key.name === "left" && (this.state.view === "room" || this.state.view === "dm") && this.state.focus === "center") {
-          await this.cancel();
         } else if ((key.name === "return" || key.name === "space")) {
           await this.invokeFocusedAction();
         } else if (key.name === "right" && this.state.focus === "left") {
@@ -2336,7 +2631,7 @@ export class ParatuiApp {
         this.render();
         this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
       } catch (error) {
-        this.state.status = error instanceof Error ? error.message : String(error);
+        this.state.status = this.formatUiError(error);
         this.render();
         this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
       }
@@ -2350,10 +2645,19 @@ export class ParatuiApp {
     if (process.stdout.isTTY) {
       process.stdout.off("resize", onResize);
     }
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(false);
+    }
+    process.stdin.pause();
+    this.#runningInteractive = false;
   }
 
   render(): void {
     if (this.options.headless) {
+      return;
+    }
+    if (!this.#terminalUiActive) {
+      this.bridge.emit({ type: "state", snapshot: this.snapshot() });
       return;
     }
     this.#viewport = this.readViewport();
@@ -2366,10 +2670,17 @@ export class ParatuiApp {
     void this.#realtime.disconnect().catch(() => undefined);
     void this.#parasceneRealtime.disconnect().catch(() => undefined);
     this.stopPeopleRefreshLoop();
+    if (this.#persistUiCacheTimer) {
+      clearTimeout(this.#persistUiCacheTimer);
+      this.#persistUiCacheTimer = null;
+    }
+    void this.persistUiCacheNow().catch(() => undefined);
     this.deactivateTerminalUi();
     if (this.#runningInteractive && process.stdin.isTTY) {
       process.stdin.setRawMode(false);
     }
+    process.stdin.pause();
+    this.#runningInteractive = false;
     this.bridge.close();
     if (this.#interactiveResolver) {
       this.#interactiveResolver();
@@ -2567,6 +2878,7 @@ export class ParatuiApp {
     if (previousKey) {
       this.setLeftSelectionByKey(previousKey);
     }
+    this.schedulePersistUiCache();
   }
 
   private rememberRoom(room: RoomSummary): void {
@@ -2586,7 +2898,7 @@ export class ParatuiApp {
     if (previousKey) {
       this.setLeftSelectionByKey(previousKey);
     }
-    void saveConfig(this.config);
+    this.schedulePersistUiCache();
   }
 
   private applySocialSummaries(rooms: RoomSummary[], dms: DmSummary[]): void {
@@ -2596,12 +2908,14 @@ export class ParatuiApp {
       this.config.social.recentRooms.map((roomName) => recentRoomSummary(roomName))
     );
     this.state.social.dms = [...dms];
+    this.state.loaded.social = true;
     this.state.people.items = this.mergePeopleCandidates(this.state.people.items);
     if (previousKey) {
       this.setLeftSelectionByKey(previousKey);
     } else {
       this.selectedLeftEntryWithinBounds();
     }
+    this.schedulePersistUiCache();
   }
 
   private async refreshPeoplePresence(): Promise<boolean> {
@@ -2636,6 +2950,7 @@ export class ParatuiApp {
     if (previousKey) {
       this.setLeftSelectionByKey(previousKey);
     }
+    this.schedulePersistUiCache();
     return before !== this.peopleSignature();
   }
 
@@ -2651,6 +2966,7 @@ export class ParatuiApp {
       rooms: this.state.social.rooms.map((room) => [room.name, room.lastMessageAt, room.lastMessageText]),
       dms: this.state.social.dms.map((dm) => [dm.handle, dm.lastMessageAt, dm.lastMessageText])
     });
+    this.schedulePersistUiCache();
     return before !== after;
   }
 
@@ -2668,7 +2984,26 @@ export class ParatuiApp {
         updatedAt: Date.now()
       };
     }
+    this.schedulePersistUiCache();
     return unreadCount !== before;
+  }
+
+  private kickAuthenticatedBackgroundHydration(): void {
+    if (!this.state.authUser) {
+      return;
+    }
+
+    void Promise.allSettled([
+      this.refreshPeople(),
+      this.loadSocialLists(),
+      this.refreshNotifications()
+    ]).then(() => {
+      if (!this.state.authUser) {
+        return;
+      }
+      this.render();
+      this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
+    });
   }
 
   private explicitParasceneRealtimeConfig(): ParasceneRealtimeConfig | null {
@@ -2705,7 +3040,6 @@ export class ParatuiApp {
       return;
     }
     if (this.#parasceneRealtime.connected()) {
-      this.syncParasceneRealtimeSubscriptions();
       return;
     }
     if (this.#parasceneRealtimeBootstrapPromise || Date.now() < this.#parasceneRealtimeRetryAt) {
@@ -2741,7 +3075,9 @@ export class ParatuiApp {
       void this.#parasceneRealtime.setThread(null).catch(() => undefined);
       return;
     }
-    this.ensureParasceneRealtime();
+    if (!this.#parasceneRealtime.connected()) {
+      this.ensureParasceneRealtime();
+    }
     if (!this.#parasceneRealtime.connected()) {
       return;
     }
@@ -2818,12 +3154,12 @@ export class ParatuiApp {
     } else if (this.state.view === "dm" && this.state.social.dmHandle) {
       const handle = this.state.social.dmHandle;
       const remembered = this.state.social.dms.find((item) => item.handle === handle) || null;
-      const data = await this.loadDmCached(handle, true);
+      const data = await this.loadDmCached(handle, true, remembered?.threadId);
       if (this.state.view !== "dm" || this.state.social.dmHandle !== handle || this.state.social.threadId !== threadId) {
         return;
       }
       const nextDm = remembered && data.dm.displayName === data.dm.handle
-        ? { ...data.dm, displayName: remembered.displayName, online: remembered.online }
+        ? { ...data.dm, threadId: data.threadId, displayName: remembered.displayName, online: remembered.online }
         : data.dm;
       this.state.social.threadId = data.threadId;
       this.state.social.threadMessages = data.messages;
@@ -2836,20 +3172,33 @@ export class ParatuiApp {
     this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
   }
 
+  private showCachedModeStatus(message: string): void {
+    if (!this.state.authUser || this.options.headless) {
+      return;
+    }
+    this.state.status = message;
+    this.render();
+    this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
+  }
+
   private applyPeopleList(people: CliUserSummary[]): void {
     const previousKey = this.currentLeftSelectionKey();
     this.state.people.items = this.mergePeopleCandidates(people);
+    this.state.loaded.people = true;
     if (previousKey) {
       if (this.setLeftSelectionByKey(previousKey)) {
+        this.schedulePersistUiCache();
         return;
       }
     }
     const preferredHandle = this.state.authUser?.handle || this.state.people.items[0]?.handle || null;
     if (preferredHandle && this.setLeftSelectionByKey(`person:${preferredHandle}`)) {
+      this.schedulePersistUiCache();
       return;
     }
     this.state.people.pageIndex = 0;
     this.selectedLeftEntryWithinBounds();
+    this.schedulePersistUiCache();
   }
 
   private startPeopleRefreshLoop(): void {
@@ -3044,26 +3393,8 @@ export class ParatuiApp {
     const viewportChanged = !this.#lastRenderedViewport
       || this.#lastRenderedViewport.columns !== this.#viewport.columns
       || this.#lastRenderedViewport.rows !== this.#viewport.rows;
-
-    if (!this.#terminalUiActive || viewportChanged || this.#lastRenderedLines.length !== nextLines.length) {
-      process.stdout.write("\x1b[H\x1b[2J");
-      process.stdout.write(nextLines.join("\n"));
-      this.#lastRenderedLines = nextLines;
-      this.#lastRenderedViewport = { ...this.#viewport };
-      return;
-    }
-
-    let output = "";
-    for (let index = 0; index < nextLines.length; index += 1) {
-      if (nextLines[index] === this.#lastRenderedLines[index]) {
-        continue;
-      }
-      output += `\x1b[${index + 1};1H`;
-      output += nextLines[index] || "";
-    }
-    if (output) {
-      process.stdout.write(output);
-    }
+    process.stdout.write(viewportChanged ? "\x1b[H\x1b[2J" : "\x1b[H");
+    process.stdout.write(nextLines.join("\n"));
     this.#lastRenderedLines = nextLines;
     this.#lastRenderedViewport = { ...this.#viewport };
   }
@@ -3174,6 +3505,7 @@ export class ParatuiApp {
         this.state.feed.items = cached;
         this.state.feed.currentIndex = Math.max(0, Math.min(this.state.feed.currentIndex, Math.max(0, cached.length - 1)));
       }
+      this.state.loaded.feed = Boolean(cached || this.state.loaded.feed);
       this.state.view = "feed";
       this.state.actions.selectedIndex = 0;
       this.state.status = cached ? `feed ${cached.length}` : "loading feed";
@@ -3191,6 +3523,7 @@ export class ParatuiApp {
           Math.min(this.state.notifications.selectedIndex, Math.max(0, cached.items.length - 1))
         );
       }
+      this.state.loaded.notifications = Boolean(cached || this.state.loaded.notifications);
       this.state.view = "notifications";
       this.state.actions.selectedIndex = 0;
       this.state.status = cached
@@ -3204,6 +3537,18 @@ export class ParatuiApp {
       this.state.view = "settings";
       this.state.actions.selectedIndex = 0;
       this.state.status = "settings";
+      this.setLeftViewContext();
+      return;
+    }
+
+    if (entry.kind === "exit") {
+      this.state.status = "press enter to exit";
+      this.setLeftViewContext();
+      return;
+    }
+
+    if (entry.kind === "placeholder") {
+      this.state.status = "loading";
       this.setLeftViewContext();
       return;
     }
@@ -3237,6 +3582,7 @@ export class ParatuiApp {
                 viewer_follows: false,
                 plan: "free"
               });
+        this.state.loaded.profile = Boolean(cached || this.state.loaded.profile);
         this.state.view = "profile";
         this.state.actions.selectedIndex = 0;
         this.state.status = cached ? `profile @${entry.handle}` : `loading @${entry.handle}`;
@@ -3248,7 +3594,9 @@ export class ParatuiApp {
       this.state.social.dmHandle = entry.handle;
       this.state.social.roomName = null;
       this.state.social.threadId = cachedDm?.threadId || null;
+      this.state.social.threadPageIndex = 0;
       this.state.social.threadMessages = cachedDm?.messages || [];
+      this.state.loaded.thread = Boolean(cachedDm);
       this.state.view = "dm";
       this.state.actions.selectedIndex = 0;
       this.state.status = cachedDm ? `dm @${entry.handle}` : `loading dm @${entry.handle}`;
@@ -3262,7 +3610,9 @@ export class ParatuiApp {
       this.state.social.roomName = roomName;
       this.state.social.dmHandle = null;
       this.state.social.threadId = cachedRoom?.threadId || null;
+      this.state.social.threadPageIndex = 0;
       this.state.social.threadMessages = cachedRoom?.messages || [];
+      this.state.loaded.thread = Boolean(cachedRoom);
       this.state.view = "room";
       this.state.actions.selectedIndex = 0;
       this.state.status = cachedRoom ? `room ${roomName}` : `loading room ${roomName}`;
@@ -3293,6 +3643,7 @@ export class ParatuiApp {
         return;
       }
       this.state.feed.items = items;
+      this.state.loaded.feed = true;
       this.state.feed.currentIndex = Math.max(0, Math.min(this.state.feed.currentIndex, Math.max(0, items.length - 1)));
       if (this.isCurrentLeftSelectionRequest(entry, requestId)) {
         await this.loadCurrentFeedDetail();
@@ -3301,6 +3652,7 @@ export class ParatuiApp {
         return;
       }
       this.state.status = `feed ${items.length}`;
+      this.schedulePersistUiCache();
       return;
     }
 
@@ -3312,6 +3664,7 @@ export class ParatuiApp {
       const previousId = this.state.notifications.items[this.state.notifications.selectedIndex]?.id ?? null;
       this.state.notifications.items = data.items;
       this.state.notifications.unreadCount = data.unreadCount;
+      this.state.loaded.notifications = true;
       if (previousId != null) {
         const nextIndex = data.items.findIndex((item) => item.id === previousId);
         this.state.notifications.selectedIndex = nextIndex >= 0 ? nextIndex : 0;
@@ -3321,10 +3674,11 @@ export class ParatuiApp {
       this.state.status = data.unreadCount
         ? `notifications ${data.unreadCount} unread`
         : "notifications";
+      this.schedulePersistUiCache();
       return;
     }
 
-    if (entry.kind === "settings" || entry.kind === "new-room" || entry.kind === "people_page") {
+    if (entry.kind === "settings" || entry.kind === "new-room" || entry.kind === "people_page" || entry.kind === "exit" || entry.kind === "placeholder") {
       return;
     }
 
@@ -3335,24 +3689,28 @@ export class ParatuiApp {
           return;
         }
         this.state.profile = profile;
+        this.state.loaded.profile = true;
         this.state.status = `profile @${entry.handle}`;
+        this.schedulePersistUiCache();
         return;
       }
 
       const remembered = this.state.social.dms.find((item) => item.handle === entry.handle) || null;
-      const data = await this.loadDmCached(entry.handle, force);
+      const data = await this.loadDmCached(entry.handle, force, remembered?.threadId);
       if (!this.isCurrentLeftSelectionRequest(entry, requestId)) {
         return;
       }
       const nextDm = remembered && data.dm.displayName === data.dm.handle
-        ? { ...data.dm, displayName: remembered.displayName, online: remembered.online }
+        ? { ...data.dm, threadId: data.threadId, displayName: remembered.displayName, online: remembered.online }
         : data.dm;
       this.state.social.dmHandle = nextDm.handle;
       this.state.social.roomName = null;
       this.state.social.threadId = data.threadId;
       this.state.social.threadMessages = data.messages;
+      this.state.loaded.thread = true;
       this.rememberDm(nextDm);
       this.state.status = `dm @${nextDm.handle}`;
+      this.schedulePersistUiCache();
       return;
     }
 
@@ -3365,8 +3723,10 @@ export class ParatuiApp {
       this.state.social.dmHandle = null;
       this.state.social.threadId = data.threadId;
       this.state.social.threadMessages = data.messages;
+      this.state.loaded.thread = true;
       this.rememberRoom(data.room);
       this.state.status = `room ${data.room.name}`;
+      this.schedulePersistUiCache();
     }
   }
 
@@ -3424,7 +3784,7 @@ export class ParatuiApp {
     this.primeLeftSelection(entry);
     this.syncParasceneRealtimeSubscriptions();
     this.scheduleLeftPrefetch(this.state.people.selectedIndex);
-    void this.hydrateLeftSelection(entry, requestId, force)
+    void this.hydrateLeftSelection(entry, requestId, force || this.shouldForceHydrateLeftSelection(entry))
       .then(() => {
         if (!this.isCurrentLeftSelectionRequest(entry, requestId)) {
           return;
@@ -3437,7 +3797,7 @@ export class ParatuiApp {
         if (!this.isCurrentLeftSelectionRequest(entry, requestId)) {
           return;
         }
-        this.state.status = error instanceof Error ? error.message : String(error);
+        this.state.status = this.formatUiError(error);
         this.render();
         this.bridge.emit({ type: "idle", snapshot: this.snapshot() });
       });
@@ -3453,7 +3813,7 @@ export class ParatuiApp {
     const requestId = ++this.#leftSelectionLoadVersion;
     this.primeLeftSelection(entry);
     this.syncParasceneRealtimeSubscriptions();
-    await this.hydrateLeftSelection(entry, requestId, force);
+    await this.hydrateLeftSelection(entry, requestId, force || this.shouldForceHydrateLeftSelection(entry));
     if (!this.isCurrentLeftSelectionRequest(entry, requestId)) {
       return;
     }
@@ -3464,6 +3824,17 @@ export class ParatuiApp {
 
   private currentLeftSelection(): LeftNavEntry | null {
     return getLeftNavEntry(this.state, this.state.people.selectedIndex);
+  }
+
+  private shouldForceHydrateLeftSelection(entry: LeftNavEntry): boolean {
+    if (entry.kind === "room") {
+      return true;
+    }
+    return Boolean(
+      entry.kind === "person"
+      && entry.handle
+      && entry.handle !== this.state.authUser?.handle
+    );
   }
 
   private preferredHomeHandle(): string | null {
@@ -3491,14 +3862,22 @@ export class ParatuiApp {
     if (entry.kind === "settings") {
       return "settings";
     }
+    if (entry.kind === "exit") {
+      return "press enter to exit";
+    }
     if (entry.kind === "person" && entry.handle) {
       return `selected @${entry.handle}`;
     }
     if (entry.kind === "people_page") {
-      return `people page ${(entry.pageIndex || 0) + 1}/${entry.pageCount || 1}`;
+      return entry.pageCount
+        ? `people page ${(entry.pageIndex || 0) + 1}/${entry.pageCount}`
+        : "people page 0/0";
     }
     if (entry.kind === "room" && entry.roomName) {
       return `selected room ${entry.roomName}`;
+    }
+    if (entry.kind === "placeholder") {
+      return "loading";
     }
     return "create room";
   }

@@ -1,6 +1,6 @@
 {
   "name": "paratui",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "private": false,
   "description": "Keyboard-native TUI for parascene.com",
   "type": "module",
@@ -23,6 +23,7 @@
     "dist/src/",
     "paratui",
     "README.md",
+    "VISION.md",
     "website/parasharkgod/"
   ],
   "publishConfig": {

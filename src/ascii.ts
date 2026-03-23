@@ -1,6 +1,7 @@
 import sharp from "sharp";
 
 const DEFAULT_CHARS = " .:-=+*#%@";
+const HORIZONTAL_CHARACTER_SCALE = 2;
 
 export interface AsciiRenderSize {
   width: number;
@@ -12,9 +13,11 @@ export async function imageBufferToAscii(
   width = 38,
   height = 16
 ): Promise<string> {
+  const targetWidth = Math.max(2, Math.floor(width));
+  const sampleWidth = Math.max(1, Math.ceil(targetWidth / HORIZONTAL_CHARACTER_SCALE));
   const { data, info } = await sharp(buffer)
     .resize({
-      width,
+      width: sampleWidth,
       height,
       fit: "inside"
     })
@@ -29,9 +32,10 @@ export async function imageBufferToAscii(
       const idx = y * info.width + x;
       const brightness = data[idx] ?? 0;
       const bucket = Math.round((brightness / 255) * (DEFAULT_CHARS.length - 1));
-      line += DEFAULT_CHARS[bucket] || " ";
+      const glyph = DEFAULT_CHARS[bucket] || " ";
+      line += glyph.repeat(HORIZONTAL_CHARACTER_SCALE);
     }
-    rows.push(line);
+    rows.push(line.slice(0, targetWidth));
   }
 
   return rows.join("\n");

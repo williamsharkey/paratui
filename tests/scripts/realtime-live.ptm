@@ -11,7 +11,7 @@
 !assert status=live room sent noir
 
 /realtime/dm/send @crosshj text="macro live dm"
-!assert status=live dm @crosshj
+!wait realtime.lastMessageText=macro live dm
 
 /realtime/signal/send @crosshj type=offer payload="macro-offer" call=call-1
 !assert status=live signal offer @crosshj

@@ -8,6 +8,7 @@
 - Website source for `parasharkgod.com` lives here under `website/parasharkgod/`.
 - The private deploy mirror repo is `williamsharkey/parasharkgod`.
 - Keep the website files in sync between this repo and the private deploy repo.
+- Keep long-form product/design notes in `VISION.md`; keep `README.md` focused on install and user-facing usage.
 
 ## Reference code
 

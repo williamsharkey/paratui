@@ -558,6 +558,10 @@ export class InteractiveAppHarness {
         });
       })
     ]);
+    const startedWaitingForScreen = Date.now();
+    while (!harness.#latestScreen.trim() && Date.now() - startedWaitingForScreen < 2_000) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     return harness;
   }
 

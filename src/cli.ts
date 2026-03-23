@@ -69,8 +69,18 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n`);
-  process.exitCode = 1;
-});
+async function flushAndExit(code: number): Promise<never> {
+  await Promise.all([
+    new Promise<void>((resolve) => process.stdout.write("", () => resolve())),
+    new Promise<void>((resolve) => process.stderr.write("", () => resolve()))
+  ]);
+  process.exit(code);
+}
+
+main()
+  .then(() => flushAndExit(typeof process.exitCode === "number" ? process.exitCode : 0))
+  .catch(async (error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${message}\n`);
+    await flushAndExit(1);
+  });

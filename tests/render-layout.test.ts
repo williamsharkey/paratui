@@ -86,6 +86,7 @@ function createState(): AppState {
       threadId: null,
       dmHandle: null,
       roomName: null,
+      threadPageIndex: 0,
       threadMessages: [],
       rooms: [],
       dms: []
@@ -99,6 +100,14 @@ function createState(): AppState {
       items: [],
       unreadCount: 3,
       selectedIndex: 0
+    },
+    loaded: {
+      people: true,
+      social: true,
+      notifications: true,
+      feed: true,
+      thread: true,
+      profile: true
     },
     realtime: {
       connected: false,
@@ -195,4 +204,22 @@ test("multiline pane content stays inside the pane grid", () => {
   }
   assert.match(screen, /#tips/);
   assert.match(screen, /@croskie/);
+});
+
+test("thread history paginates long wrapped conversations with a pager line", () => {
+  const state = createState();
+  state.view = "dm";
+  state.loaded.thread = true;
+  state.social.dmHandle = "crosshj";
+  state.social.threadMessages = Array.from({ length: 40 }, (_, index) => ({
+    id: index + 1,
+    authorHandle: index % 2 === 0 ? "sharkgod" : "crosshj",
+    authorDisplayName: index % 2 === 0 ? "Shark God" : "crosshj",
+    text: `long message ${index + 1} `.repeat(6).trim(),
+    createdAt: new Date().toISOString()
+  }));
+  const commands = createCommandRegistry();
+  const screen = renderApp(state, commands, { columns: 90, rows: 18 });
+  assert.match(screen, /history\[1\/\d+\]/);
+  assert.match(screen, /right older/);
 });

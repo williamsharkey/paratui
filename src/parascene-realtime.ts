@@ -57,7 +57,7 @@ export class ParasceneRealtimeClient {
       await this.disconnect();
       this.#client = createClient(config.url, config.anonKey, {
         auth: {
-          autoRefreshToken: true,
+          autoRefreshToken: false,
           persistSession: false,
           detectSessionInUrl: false
         }
